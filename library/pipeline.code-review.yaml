@@ -1,0 +1,102 @@
+# pipeline framework — shared code-review rules.
+#
+# Copy/symlink this into a project as part of its rule set, or reference it from
+# the project's own .code-review.yaml. Each rule is one LLM evaluation per
+# matched file. These encode the architecture contract (see
+# node_modules/pipeline/docs/ARCHITECTURE.md) so an agent gets perfect-recall
+# reminders of any invariant it broke.
+
+# ── Microagents ───────────────────────────────────────────────────────────────
+- id: pipeline-microagent-conventions
+  description: Microagents answer one question via one typed tool call; deterministic work stays outside. (Focus, not size.)
+  matches:
+    - "microagents/**/*.coffee"
+  prompt: |
+    Use the read_file tool to read the conventions document at:
+      node_modules/agl-ai/docs/MICROAGENT.md
+    The given file is a microagent. A microagent's simplicity is about FOCUS,
+    NOT SIZE. Judge it ONLY against the three load-bearing invariants:
+      - SINGLE DECISION: one question, one Agent.factory, one run, one final
+        output tool call. (Multiple output-tool PARAMETERS are fine.)
+      - TYPED OUTPUT: the answer is a strongly-typed output-tool schema.
+      - DETERMINISTIC BOUNDARY: I/O, parsing, formatting, persistence, retries
+        live in the calling code, not inside the model.
+    Do NOT penalize a long system prompt, embedded guides, or context restated in
+    the prompt — an arbitrarily large, focused prompt is allowed. Minimal-prompt /
+    no-duplication is NOT a requirement. Return pass=true if the three invariants
+    hold; otherwise pass=false naming the broken invariant. Shared/helper modules
+    that register no microagent pass unless they clearly violate an invariant.
+
+# ── Gate logic ────────────────────────────────────────────────────────────────
+- id: pipeline-gate-logic-wrapped
+  description: Gate logic (selection predicates + processing guards) must go through the Gate(...) marker.
+  matches:
+    - "systems/**/*.coffee"
+  prompt: |
+    Use the read_file tool to read node_modules/pipeline/docs/ARCHITECTURE.md
+    (the "Gate logic" section) if present.
+
+    Gate logic is the most safety-critical part of a system: it decides which
+    entities the system SELECTS and when it GUARDS (aborts) processing. The
+    framework requires every piece of gate logic to be wrapped in the `Gate(...)`
+    marker so it is enforceable, debuggable, and extractable into the docs —
+    exactly as component access goes through validated component models.
+
+    Return pass=false if this system contains gate logic NOT wrapped in `Gate`:
+      - an entity-SELECTION predicate (the callback to `World.Entity__find(...)`
+        or `.find(...)`) whose boolean is not wrapped in `Gate`;
+      - a processing GUARD (`continue if/unless …`, `break if/unless …`) whose
+        condition is not wrapped in `Gate`.
+    `Gate` may be called any number of times, anywhere in the system — it does
+    NOT need to merge conditions. A line deliberately exempt may carry a trailing
+    `# gate:ignore`. Name each unwrapped gate line in the rationale.
+
+# ── Systems ───────────────────────────────────────────────────────────────────
+- id: pipeline-system-pulls-not-pushed
+  description: Systems select their own entities via World.Entity__find; they are never handed entities.
+  matches:
+    - "systems/**/*.coffee"
+  prompt: |
+    This file is a pipeline System. The framework contract (read
+    node_modules/pipeline/docs/ARCHITECTURE.md if needed) requires:
+      - the system QUERIES the world for the entities it operates on, via
+        _G.World.Entity__find(predicate) (archetype-style: by stage / component
+        presence) — it must NOT receive an `entity` or `store` as a parameter;
+      - it iterates at most _G.pipelineWidth entities per tick;
+      - it owns persistence: it calls Entity.transition / patch / merge etc.;
+      - per-entity work is wrapped so a failure calls Entity.recordError (and it
+        respects Entity.inBackoff), so one bad entity can't wedge the loop.
+    Return pass=false if the system takes pushed entities, ignores pipelineWidth,
+    or lacks per-entity error handling. Name the specific issue.
+
+- id: pipeline-no-llm-judging-own-output
+  description: Maker ≠ Checker — a verify/judge system must use a different subject than the generator.
+  severity: warn
+  matches:
+    - "systems/**/*verify*.coffee"
+    - "systems/**/*review*.coffee"
+    - "systems/**/*judge*.coffee"
+    - "systems/**/*critic*.coffee"
+  prompt: |
+    This file appears to be a verification / judge / critic system. The contract
+    requires Maker ≠ Checker: the subject (and ideally the model) that GENERATED
+    an artifact must not be the same one that grades it. Return pass=false if the
+    judging logic reuses the generator's subject identity or otherwise lets a
+    model grade its own output. Explain in the rationale.
+
+# ── Schema discipline ─────────────────────────────────────────────────────────
+- id: pipeline-component-access-via-model
+  description: Application code accesses component fields through validated component models, not raw entity objects.
+  severity: warn
+  matches:
+    - "systems/**/*.coffee"
+    - "microagents/**/*.coffee"
+  prompt: |
+    The framework contract says systems/microagents should read and write
+    component FIELDS through their component-model accessors (which validate the
+    caller's subject against schema/*.yaml), not by reaching into raw entity
+    objects for field values. Reading `entity.workflow?._stage` to GATE in a
+    World.Entity__find predicate is fine. Mutating component field values by
+    directly assigning to a loaded entity object (bypassing the component model
+    and its SchemaValidator.check) is NOT. Return pass=false if you see field
+    MUTATIONS that bypass the component model, and name them.

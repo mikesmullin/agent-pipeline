@@ -1,0 +1,49 @@
+{
+  "name": "pipeline",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "ECS-inspired, disk-authoritative agent-pipeline framework (Bun + CoffeeScript). The reusable contract behind agl-style microagent pipelines.",
+  "main": "index.coffee",
+  "exports": {
+    ".": "./index.coffee",
+    "./globals": "./src/globals.coffee",
+    "./entity": "./src/entity.coffee",
+    "./world": "./src/world.coffee",
+    "./schema-validator": "./src/schema-validator.coffee",
+    "./component": "./src/component.coffee",
+    "./loop": "./src/loop.coffee",
+    "./register": "./register.mjs"
+  },
+  "bin": {
+    "pipeline": "./bin/pipeline.mjs"
+  },
+  "files": [
+    "index.coffee",
+    "register.mjs",
+    "src/",
+    "bin/",
+    "cli/",
+    "templates/",
+    "docs/",
+    "library/"
+  ],
+  "scripts": {
+    "test": "bun test/unit.mjs"
+  },
+  "dependencies": {
+    "agl-ai": "^0.1.4",
+    "bun-coffeescript": "^1.0.3",
+    "chokidar": "^5.0.0",
+    "js-yaml": "^4.1.1"
+  },
+  "keywords": [
+    "agent",
+    "pipeline",
+    "ecs",
+    "microagent",
+    "llm",
+    "bun",
+    "coffeescript"
+  ],
+  "license": "MIT"
+}
