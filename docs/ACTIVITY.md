@@ -150,7 +150,7 @@ themeColor:  '#6366f1'
 | `configFile` | yes | standard | Per-activity runtime config. |
 | `docsDir` | yes | standard | Per-activity docs dir. |
 | `stages` | no | standard | Decorative phase labels. |
-| `pipeline` | yes | standard | Ordered system function names. |
+| `pipeline` | yes | standard | Ordered system function names. A system may `export GATE_FIELDS = [...]` (the `<component>.<field>` dot-paths its gate reads); the union across the pipeline is the activity's field-index (see ARCHITECTURE #14). |
 | `agents` | yes | standard | Agents to import (incl. the microagent subset). `{name, path}` or bare string. |
 | `jsonStringFields` | no | standard | JSON-string dot-paths to expand/compact. |
 | `themeColor` | no | standard (extension-friendly) | Accent color for an optional UI. |

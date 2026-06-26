@@ -102,10 +102,37 @@ export default async function check() {
   console.log(`Schema files: ${schemaFiles.map(f => `schema/${f}`).join(', ')}\n`)
 
   // ── Scan source ─────────────────────────────────────────────────────────────
+  // systems/ + microagents/ + agents/ (the agent superset) are the standard
+  // dirs that hold validated component accessors; a top-level server.coffee (if
+  // present) carries route:* handlers that also access components.
   const sourceFiles = [
     ...await listCoffee(resolve(ROOT, 'systems')),
     ...await listCoffee(resolve(ROOT, 'microagents')),
+    ...await listCoffee(resolve(ROOT, 'agents')),
   ]
+  for (const extra of ['server.coffee']) {
+    const p = resolve(ROOT, extra)
+    try { await stat(p); sourceFiles.push(p) } catch {}
+  }
+
+  // ── Activity-template expansion ─────────────────────────────────────────────
+  // A shared route/agent handler may build its subject as a template, e.g.
+  // `route:#{activityId}/:uid/edit` or `agent:#{activityId}/chat`, to serve every
+  // activity with one handler. Expand `#{activityId}` (and the JS `${activityId}`
+  // form) to each concrete activity id from activities/*.yaml and require the
+  // resulting subject to be allowed for ALL activities. Strings without the
+  // placeholder pass through unchanged.
+  const activityIds = []
+  for (const f of (await readdir(resolve(ROOT, 'activities')).catch(() => []))) {
+    if (!f.endsWith('.yaml')) continue
+    try { const c = yamlLoad(await readFile(resolve(ROOT, 'activities', f), 'utf8')); if (c?.id) activityIds.push(c.id) } catch {}
+  }
+  const expandSubject = (subject) => {
+    if (!/[#$]\{activityId\}/.test(subject)) return [subject]
+    if (!activityIds.length) return [subject]
+    return activityIds.map((id) => subject.replace(/[#$]\{activityId\}/g, id))
+  }
+
   const CALL_RE = /\b([A-Z][A-Za-z]+Component)\.([a-zA-Z_]\w*)\s*\(?\s*(?:['"]([^'"]+)['"]|([A-Za-z_]\w*))/g
   const SYSTEM_CONST_RE = /^\s*(?:const\s+|let\s+|var\s+)?(?:SYSTEM|SUBJECT)\s*=\s*['"]([^'"]+)['"]/m
 
@@ -133,14 +160,17 @@ export default async function check() {
         // Resolve subject: a string literal, or the file-level SYSTEM/SUBJECT const.
         let subject = lit ?? (varName && /^(SYSTEM|SUBJECT)$/.test(varName) ? fileSubject : null)
         if (subject == null) continue   // dynamic subject we can't resolve — skip
+        const subjects = expandSubject(subject)   // one per activity for #{activityId} templates
         let lineOk = true
         for (const field of fields) {
           const def = components[map.component].fields[field]
           fieldUsage.set(`${map.component}.${field}`, (fieldUsage.get(`${map.component}.${field}`) ?? 0) + 1)
           const allowed = def?.subjects ?? []
-          if (!allowed.includes(subject)) {
-            lineOk = false
-            out.push(`${R}✗${X} ${rel}:${i + 1}  ${subject} → ${map.component}.${field} ${D}(not in allowlist)${X}`)
+          for (const subj of subjects) {
+            if (!allowed.includes(subj)) {
+              lineOk = false
+              out.push(`${R}✗${X} ${rel}:${i + 1}  ${subj} → ${map.component}.${field} ${D}(not in allowlist)${X}`)
+            }
           }
         }
         if (lineOk) { valid++; out.push(`${G}✓${X} ${rel}:${i + 1}  ${subject} → ${map.component}.${fields.join(',')}`) }
@@ -188,6 +218,99 @@ export default async function check() {
   }
   if (gateViolations) console.log(`${Y}\n${gateViolations} gate-logic line(s) not wrapped in Gate(...)${X}`)
 
+  // ── GATE_FIELDS index check ─────────────────────────────────────────────────
+  // The field-index requires each Entity.query system to account for what its
+  // gate reads. We enforce, like gate logic itself:
+  //   (0) MANDATORY  — a system that calls Entity.query MUST either declare a
+  //                    non-empty `export GATE_FIELDS = [...]`, OR carry an
+  //                    explicit `# index:ignore` on the Entity.query line (an
+  //                    intentional full-body stage whose gate reads heavy bodies).
+  //                    Neither → error (no more silent skip of a forgotten index).
+  //   (1) EXISTENCE  — every GATE_FIELDS entry is a real schema component.field.
+  //   (2) COVERAGE   — every component field the gate predicate READS is in
+  //                    GATE_FIELDS (else the projection won't carry it → silent
+  //                    stuck/false-gate). A single read may be exempted with a
+  //                    trailing `# index:ignore` on that read's line.
+  //   (3) OVER-DECLARE (warn only) — a GATE_FIELDS entry the gate never reads.
+  let indexErrors = 0
+  const GATE_FIELDS_RE = /export\s+GATE_FIELDS\s*=\s*\[([^\]]*)\]/
+  const QUERY_RE = /\bEntity\.query\b/
+  for (const file of await listCoffee(resolve(ROOT, 'systems'))) {
+    const text = await readFile(file, 'utf8').catch(() => null)
+    if (text == null) continue
+    const rel = file.replace(ROOT + '/', '')
+    const lines = text.split('\n')
+
+    // Does this system use Entity.query, and are any of those lines opted out?
+    const queryLines = lines.filter(l => QUERY_RE.test(l))
+    const usesQuery = queryLines.length > 0
+    const allQueriesOptOut = usesQuery && queryLines.every(l => /#\s*index:ignore/.test(l))
+
+    const gfMatch = text.match(GATE_FIELDS_RE)
+    const declared = gfMatch ? [...gfMatch[1].matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]) : []
+
+    // (0) Mandatory: a query system needs GATE_FIELDS or an explicit opt-out.
+    if (usesQuery && declared.length === 0) {
+      if (allQueriesOptOut) {
+        console.log(`${D}—${X} ${rel}  Entity.query full-body (# index:ignore) — no GATE_FIELDS by design`)
+      } else {
+        indexErrors++
+        console.log(`${R}✗${X} ${rel}  uses Entity.query but declares no GATE_FIELDS ${D}(add export GATE_FIELDS = [...], or mark the Entity.query line # index:ignore)${X}`)
+      }
+      continue
+    }
+    if (declared.length === 0) continue   // not a query system, nothing to index
+
+    const declaredSet = new Set(declared)
+
+    // (1) existence
+    for (const dp of declared) {
+      const [comp, field] = dp.split('.')
+      if (!components[comp]?.fields?.[field]) {
+        indexErrors++
+        console.log(`${R}✗${X} ${rel}  GATE_FIELDS '${dp}' is not a schema component.field`)
+      }
+    }
+
+    // Locate each Entity.query predicate block (indentation-scoped) and collect
+    // the component fields it reads.
+    const read = new Set()
+    for (let i = 0; i < lines.length; i++) {
+      if (!QUERY_RE.test(lines[i])) continue
+      const baseIndent = lines[i].match(/^\s*/)[0].length
+      for (let j = i + 1; j < lines.length; j++) {
+        const ln = lines[j]
+        if (ln.trim() === '') continue
+        if (ln.match(/^\s*/)[0].length <= baseIndent) break   // dedent → end of predicate
+        if (/#\s*index:ignore/.test(ln)) continue
+        let m; CALL_RE.lastIndex = 0
+        while ((m = CALL_RE.exec(ln)) !== null) {
+          const [, cls, method] = m
+          const mp = accessorMap[cls]
+          if (!mp) continue
+          const fields = mp.methods[method]
+          if (!fields) continue
+          for (const f of fields) read.add(`${mp.component}.${f}`)
+        }
+      }
+    }
+
+    // (2) coverage
+    for (const dp of read) {
+      if (!declaredSet.has(dp)) {
+        indexErrors++
+        console.log(`${R}✗${X} ${rel}  gate reads ${dp} but it is missing from GATE_FIELDS ${D}(add it, or mark the read # index:ignore)${X}`)
+      }
+    }
+    // (3) over-declaration (warn)
+    for (const dp of declared) {
+      if (!read.has(dp)) console.log(`${Y}⚠${X} ${rel}  GATE_FIELDS '${dp}' not read by the gate ${D}(remove to keep the projection tight)${X}`)
+    }
+    if (read.size && [...read].every(dp => declaredSet.has(dp))) {
+      console.log(`${G}✓${X} ${rel}  GATE_FIELDS covers the gate (${declared.length} field(s))`)
+    }
+  }
+
   // ── Dangling fields ─────────────────────────────────────────────────────────
   const dangling = [...fieldUsage.entries()].filter(([, n]) => n === 0).map(([k]) => k)
   if (dangling.length) {
@@ -195,6 +318,6 @@ export default async function check() {
     for (const k of dangling) console.log(`  ${D}- ${k}${X}`)
   }
 
-  console.log(`\n${valid} valid, ${invalid} invalid, ${gateViolations} ungated, ${dangling.length} dangling`)
-  process.exit(invalid > 0 || gateViolations > 0 ? 1 : 0)
+  console.log(`\n${valid} valid, ${invalid} invalid, ${gateViolations} ungated, ${indexErrors} index, ${dangling.length} dangling`)
+  process.exit(invalid > 0 || gateViolations > 0 || indexErrors > 0 ? 1 : 0)
 }

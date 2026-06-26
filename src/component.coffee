@@ -22,12 +22,12 @@ _pascal = (s) -> (c = _camel s; c.charAt(0).toUpperCase() + c.slice 1)
 export class Component
   # Subclasses set @COMPONENT_NAME = 'fetch'
   @check: (subject, field) -> SchemaValidator.check subject, @COMPONENT_NAME, field
-  @_load: (id) -> _G.Entity.load id
-  @_save: (entity) -> _G.Entity.save entity
+  @_load: (activityId, id) -> _G.Entity.load activityId, id
+  @_save: (activityId, entity) -> _G.Entity.save activityId, entity
 
 # Build a validated component class from a flat list of scalar field names.
-# Each field gets:  ComponentClass.<field>(subject, id)               → getter
-#                   ComponentClass.set<Field>(subject, id, value)     → setter
+# Each field gets:  ComponentClass.<field>(subject, activityId, id)            → getter
+#                   ComponentClass.set<Field>(subject, activityId, id, value)  → setter
 # (For array components or multi-field writes, hand-roll a Component subclass.)
 export defineComponent = (componentName, fieldNames = []) ->
   cls = class extends Component
@@ -37,16 +37,16 @@ export defineComponent = (componentName, fieldNames = []) ->
     do (field) ->
       getName = _camel field
       setName = 'set' + _pascal field
-      cls[getName] = (subject, id) ->
+      cls[getName] = (subject, activityId, id) ->
         SchemaValidator.check subject, componentName, field
-        entity = await _G.Entity.load id
+        entity = await _G.Entity.load activityId, id
         entity?[componentName]?[field] ? null
-      cls[setName] = (subject, id, value) ->
+      cls[setName] = (subject, activityId, id, value) ->
         SchemaValidator.check subject, componentName, field
-        entity = await _G.Entity.load id
+        entity = await _G.Entity.load activityId, id
         bag = entity[componentName] ? {}
         entity[componentName] = { ...bag, [field]: value }
-        await _G.Entity.save entity
+        await _G.Entity.save activityId, entity
         value
   cls
 

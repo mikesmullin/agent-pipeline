@@ -120,7 +120,7 @@ export runPipeline = (opts = {}) ->
     console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — finishing current iteration..."
   process.on 'SIGTERM', -> _G.quit = true
 
-  await _G.Entity.init()
+  await _G.Entity.init 'default'
 
   # ── F4: single-entity / single-stage dev harness ────────────────────────────
   # `agent.coffee --entity <id> --stage <name> [--once]` runs ONE system pass
@@ -137,7 +137,7 @@ export runPipeline = (opts = {}) ->
 
   if onceFlag
     _snap = (id) ->
-      e = _G.World.get id
+      e = _G.World.for('default').get id
       return null unless e
       { _mtime, _path, rest... } = e
       JSON.parse JSON.stringify rest
@@ -178,7 +178,7 @@ export runPipeline = (opts = {}) ->
           tag = if before?[k] is undefined then "#{_GRN}+#{_RST}" else if after?[k] is undefined then "#{_RED}-#{_RST}" else "#{_CYN}~#{_RST}"
           console.log "  #{tag} #{k}"
     await _removePid()
-    _G._watcher?.close?()
+    await _G.Entity.stopWatching?()
     _G._codeWatcher?.close?()
     process.exit 0
 
@@ -207,7 +207,7 @@ export runPipeline = (opts = {}) ->
         await fn()
         timings[name] = Date.now() - t0
 
-      all = _G.World.all()
+      all = _G.World.for('default').all()
       byStage = {}
       for e in all
         st = e.workflow?._stage or 'uncaptured'
@@ -230,7 +230,7 @@ export runPipeline = (opts = {}) ->
     await _G.sleep _G.loopIntervalMs
 
   await _removePid()
-  _G._watcher?.close?()
+  await _G.Entity.stopWatching?()
   _G._codeWatcher?.close?()
   console.log "#{_DIM}#{_ts()}#{_RST} stopped."
 

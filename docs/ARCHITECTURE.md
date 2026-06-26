@@ -12,14 +12,21 @@ conventions here are enforced two ways: structurally by the `SchemaValidator` +
 
 | Primitive | What it is | Where it lives |
 |---|---|---|
-| **Entity** | One unit of work in flight. Opaque except for `id`. | `db/<id>.yaml` — **disk is the source of truth** |
+| **Entity** | One unit of work in flight. Opaque except for `id`. | `db/entities/<activity>/<id>.yaml` (or flat `db/<id>.yaml` for the synthesized single `default` activity) — **disk is the source of truth** |
 | **Component** | A named, typed bag of fields on an entity (`workflow`, `note`, …). | a top-level key in the entity YAML; declared in `schema/*.yaml` |
-| **System** | A function that advances entities through one stage. | `systems/<name>.coffee` |
+| **System** | A function that advances entities through one stage. | `systems/<activity>/<name>.coffee` |
 | **Agent** (superset) | An LLM call. The **microagent** subset answers one question via one typed tool call. | `microagents/NN-name.coffee` (subset) · `agents/NN-name.coffee` (other agents) — see `MICROAGENT.md` |
 | **The loop** | The engine tick: runs systems in weight order every N ms. | `agent.coffee` → `runPipeline()` |
 
 ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
 **S**ystems are the behavior, the loop is the frame tick.
+
+> **Multi-activity.** A project hosts one or many **activities** (independent
+> pipelines / entity kinds) declared in `activities/*.yaml` — see `ACTIVITY.md`.
+> Every `Entity` / `World` / component accessor takes the **`activityId` first**
+> so the layers stay activity-scoped. A single-activity project needs no
+> `activities/` dir: the framework synthesizes one `default` activity over flat
+> `db/`, so the scoping is invisible.
 
 ## The non-negotiable invariants
 
@@ -30,16 +37,21 @@ ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
 
 2. **Systems pull, they are never pushed.** A system's first act is to *query*
    the world for the entities it wants:
-   `World.Entity__find (e) -> e.workflow?._stage is 'captured'`. Passing an
-   `entity` or `store` into a system is an anti-pattern.
+   `Entity.query activityId, (e) -> e.workflow?._stage is 'captured'`. Passing an
+   `entity` or `store` into a system is an anti-pattern. `Entity.query` owns the
+   entity lifecycle: it scans the World, hands the system fn **full entity
+   objects** scoped to that fn, and (in field-index mode, invariant #14) hydrates
+   them on match and re-projects them at the stage boundary — so systems carry no
+   load/evict bookkeeping.
 
 3. **Query by component *presence* (archetype-style).** An entity is defined by
    which components it has. A bare entity is just an id and holds no data outside
    its components. Entities **accrete** components as systems refine them.
 
 4. **Static, Golang-style models.** `Entity` and `World` are static singletons;
-   methods take the entity (or id) as the first argument — no per-entity object
-   graph threaded through the loop.
+   methods take **`activityId` first**, then the entity (or id) — no per-entity
+   object graph threaded through the loop. (`World.for(activityId)` returns that
+   activity's cache handle.)
 
 5. **Microagents do judgment only.** I/O, shell, parsing, retries, validation,
    side-effects, and final string formatting stay out of the model. The calling
@@ -53,7 +65,10 @@ ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
 7. **Machine vs human fields by convention.** A leading `_` means
    machine-managed; an unprefixed field is the operator's to set.
 
-8. **Stage lives inside the entity (`workflow._stage`); files never move.**
+8. **Stage lives inside the entity; files never move.** Two sanctioned archetype
+   styles: a `workflow._stage` field, or a status field plus component-presence
+   (e.g. `fetch.status` + whether `dataview` is written). `Entity.query` is
+   agnostic to *what* the predicate reads, so either works.
 
 9. **Systems run in configurable weight order**, with bounded parallelism
    (`pipeline_width`) and per-entity retry/backoff (`Entity.recordError` +
@@ -78,6 +93,21 @@ ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
     logic is enforceable, debuggable, and self-documenting — the same discipline
     the ACL applies to component access.
 
+14. **Field-index: selection runs on a projection; bodies hydrate on match.**
+    (Opt-in, for low-memory selection at scale.) When `_G.useFieldIndex` is on
+    and an activity declares an index — the union of its systems' exported
+    `GATE_FIELDS` (the `<component>.<field>` dot-paths each gate reads) — the
+    World holds only a thin **projection** of each entity (id + those fields)
+    instead of the full body, so a large corpus no longer balloons RSS. The gate
+    predicate scans projections; `Entity.query` then **hydrates matches to full
+    bodies** from disk before handing them to the system fn, and the loop
+    **re-projects** the hydrated set at the stage boundary (`Entity.evictHydrated`).
+    Crucially, `Entity.load` returns the projection **only while a gate is
+    scanning**; every other load (and therefore every write path) sees a full
+    body, so projections never truncate on save. Activities that declare no
+    `GATE_FIELDS` stay in full-body mode (back-compat). `pipeline check` enforces
+    that every gate-read field is declared (coverage) and real (existence).
+
 ## Gate logic (the `Gate(...)` marker)
 
 Gate logic — *which* entities a system selects, and *when* it aborts processing
@@ -89,10 +119,10 @@ first-class, parsable construct, every piece of gate logic is wrapped in the
 ```coffeescript
 import { Entity, Gate } from 'pipeline'
 
-# Entity.query runs the gate predicate over the World and returns up to
-# pipelineWidth matches. A predicate matches UNLESS it returns false, so the
-# guards read naturally and "falling through" = a match:
-targets = await Entity.query (e) ->
+# Entity.query runs the gate predicate over the activity's World and returns up
+# to pipelineWidth matches (full entities). A predicate matches UNLESS it returns
+# false, so the guards read naturally and "falling through" = a match:
+targets = await Entity.query activityId, (e) ->
   return false unless Gate 'captured',   e.workflow?._stage is 'captured'
   return false if     Gate 'in backoff', Entity.inBackoff e
   # …falls through → this entity matches
@@ -136,7 +166,10 @@ the runtime and `pipeline check` can resolve it.
 
 - `pipeline check` — static analyzer: every `Component.method SUBJECT, …` call
   site is validated against the schema allowlists; dangling (unreferenced)
-  fields are reported.
+  fields are reported. It also enforces **gate wrapping** (gate-ish lines must use
+  `Gate(...)`) and the **field-index** (`GATE_FIELDS` existence + coverage of the
+  fields a gate predicate reads + an over-declaration warning). Project-specific
+  compound accessors are declared in a project-root `schema-aliases.yaml`.
 - `pipeline review` — LLM `code-review` rules (subjective conventions a compiler
   can't express; see `library/`).
 - `pipeline docs` — regenerates the at-a-glance tables (pipeline → stage →

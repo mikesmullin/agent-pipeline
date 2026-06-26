@@ -61,26 +61,33 @@ bun agent.coffee             # run the loop (drops in db/_drop.md become entitie
 ## Library API
 
 ```coffeescript
-import { _G, Agent, Entity, World, SchemaValidator,
-         Component, defineComponent, runPipeline } from 'pipeline'
+import { _G, Agent, Entity, Activities, World, SchemaValidator,
+         Component, defineComponent, normalizeStrings, runPipeline } from 'pipeline'
 
 # agent.coffee is just:
 await runPipeline()
 ```
 
-- **`Entity`** — disk-authoritative persistence (`load/save/patch/merge/append/
-  setPath/drop/transition/recordError/inBackoff/generateId`).
-- **`World`** — in-memory cache + the `Entity__find(predicate)` query primitive.
+- **`Entity`** — disk-authoritative persistence, **activity-scoped** (every method
+  takes `activityId` first): `load/loadFull/save/patch/merge/append/setPath/drop/
+  transition/recordError/inBackoff/query/evict/evictHydrated/exists/allIds/
+  snapshot/create/generateId`.
+- **`Activities`** — the activity registry (`loadAll/get/all/ids/entityDir`);
+  a project hosts one or many activities, or the synthesized `default`.
+- **`World`** — per-activity cache via `World.for(activityId)` + the
+  `Entity__find(predicate)` query primitive.
 - **`SchemaValidator`** — runtime per-field ACL guard (fatal on violation).
-- **`defineComponent(name, fields)`** — build a validated component model.
+- **`defineComponent(name, fields)`** — build a validated component model
+  (accessors are `(subject, activityId, id)`).
 - **`runPipeline()`** — the engine tick (config load, hot reload, PID guard,
   weighted systems, status summary).
 
 ## What's bundled
 
-- `docs/` — `ARCHITECTURE.md`, `SCHEMA.md` (the contract). Microagent conventions
-  are the single authoritative `node_modules/agl-ai/docs/MICROAGENT.md` (shipped by
-  the `agl-ai` dependency, referenced by the rules).
+- `docs/` — `ARCHITECTURE.md`, `SCHEMA.md`, `ACTIVITY.md` (the contract).
+  Microagent conventions are the single authoritative
+  `node_modules/agl-ai/docs/MICROAGENT.md` (shipped by the `agl-ai` dependency,
+  referenced by the rules).
 - `library/pipeline.code-review.yaml` — shared convention rules, applied via
   `pipeline review`.
 
