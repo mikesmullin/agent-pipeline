@@ -109,6 +109,15 @@ eq(capped.length, 2, 'query caps at pipelineWidth')
 const limited = await Entity.query((e) => undefined, { limit: 1 })
 eq(limited.length, 1, 'query honors explicit limit')
 
+// F4 dev harness: _G.onlyEntity scopes selection to a single entity id.
+_G.onlyEntity = ids[1]
+const scoped = await Entity.query((e) => undefined)
+eq(scoped.length, 1, 'onlyEntity scopes query to one entity')
+ok(scoped[0]?.id === ids[1], 'onlyEntity selects the requested id')
+_G.onlyEntity = null
+const unscoped = await Entity.query((e) => undefined, { limit: 1 })
+eq(unscoped.length, 1, 'clearing onlyEntity restores normal selection')
+
 // Cleanup
 _G._watcher?.close?.()
 rmSync(root, { recursive: true, force: true })

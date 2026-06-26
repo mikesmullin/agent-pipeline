@@ -210,7 +210,11 @@ _G.Entity = class Entity
   @query: (predicate, opts = {}) ->
     limit = opts.limit ? _G.pipelineWidth
     out = []
-    for entity in _G.World.all()
+    pool = _G.World.all()
+    # F4 dev harness: scope selection to a single entity when _G.onlyEntity is set.
+    if _G.onlyEntity?
+      pool = pool.filter (e) -> String(e.id) is String(_G.onlyEntity)
+    for entity in pool
       _G.currentEntityId = entity.id
       result = await predicate entity
       continue if result is false

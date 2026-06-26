@@ -122,6 +122,66 @@ export runPipeline = (opts = {}) ->
 
   await _G.Entity.init()
 
+  # ── F4: single-entity / single-stage dev harness ────────────────────────────
+  # `agent.coffee --entity <id> --stage <name> [--once]` runs ONE system pass
+  # (optionally just one stage), scoped to ONE entity, then prints the gate trace
+  # + the entity's component diff and exits — for walking a real entity through
+  # the pipeline by hand. `--once` (no entity/stage) runs the whole pipeline once.
+  argv = opts.argv ? process.argv.slice(2)
+  _arg = (flag) ->
+    i = argv.indexOf flag
+    if i >= 0 then (argv[i + 1] ? true) else null
+  onceEntity = _arg('--entity')
+  onceStage  = _arg('--stage')
+  onceFlag   = argv.includes('--once') or onceEntity? or onceStage?
+
+  if onceFlag
+    _snap = (id) ->
+      e = _G.World.get id
+      return null unless e
+      { _mtime, _path, rest... } = e
+      JSON.parse JSON.stringify rest
+    _G.onlyEntity = onceEntity if onceEntity?
+    runSystems = if onceStage? then systems.filter((s) -> s.name is onceStage) else systems
+    if onceStage? and runSystems.length is 0
+      console.error "#{_RED}no system named '#{onceStage}'. Available: #{systems.map((s) -> s.name).join ', '}#{_RST}"
+      await _removePid?(); process.exit 1
+    before = if onceEntity? then _snap(onceEntity) else null
+    gateStart = (_G.gateLog?.length) ? 0
+    console.log "#{_BLD}#{_CYN}▶ run-once#{_RST} #{_DIM}entity=#{onceEntity ? '(all)'} stage=#{onceStage ? '(all)'}#{_RST}\n"
+    for { name, fn } in runSystems
+      continue unless fn?
+      _G.currentSystem = name
+      t0 = Date.now()
+      try
+        await fn()
+        console.log "#{_GRN}✓#{_RST} #{name} #{_DIM}#{Date.now() - t0}ms#{_RST}"
+      catch err
+        console.error "#{_RED}✗ #{name}#{_RST}", err?.stack or err
+    if onceEntity?
+      # Gate trace for this entity (the "why selected / skipped" view).
+      trace = (_G.gateLog ? []).slice(gateStart).filter (g) -> String(g.entity) is String(onceEntity)
+      if trace.length
+        console.log "\n#{_BLD}gate trace#{_RST} #{_DIM}(#{onceEntity})#{_RST}"
+        for g in trace
+          mark = if g.passed then "#{_GRN}✓#{_RST}" else "#{_RED}✗#{_RST}"
+          console.log "  #{mark} #{_DIM}#{g.system}#{_RST} #{g.label ? ''}"
+      # Component diff.
+      after = _snap(onceEntity)
+      keys = [...new Set([...Object.keys(before ? {}), ...Object.keys(after ? {})])].sort()
+      changed = keys.filter (k) -> JSON.stringify(before?[k]) isnt JSON.stringify(after?[k])
+      console.log "\n#{_BLD}component diff#{_RST} #{_DIM}(#{onceEntity})#{_RST}"
+      if changed.length is 0
+        console.log "  #{_DIM}(no component changes)#{_RST}"
+      else
+        for k in changed
+          tag = if before?[k] is undefined then "#{_GRN}+#{_RST}" else if after?[k] is undefined then "#{_RED}-#{_RST}" else "#{_CYN}~#{_RST}"
+          console.log "  #{tag} #{k}"
+    await _removePid()
+    _G._watcher?.close?()
+    _G._codeWatcher?.close?()
+    process.exit 0
+
   console.log """
 
   #{_BLD}#{_CYN}  🔁 #{cfg.name or basename _G.ROOT}#{_RST}#{_DIM}  agent pipeline#{_RST}

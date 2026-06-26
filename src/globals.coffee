@@ -51,6 +51,9 @@ export _G =
   quit: false
   currentEntityId: null
   currentSystem: null
+  # F4 dev harness: when set, Entity.query restricts selection to this single id
+  # (so `agent.coffee --entity <id> --stage <name>` runs one stage on one entity).
+  onlyEntity: null
 
   sleep: (ms) -> new Promise (res) -> setTimeout res, ms
 
