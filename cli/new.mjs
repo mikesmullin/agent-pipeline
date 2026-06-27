@@ -170,21 +170,14 @@ export default echoSystem
 
   await file(root, '.code-review.yaml', `# LLM-powered convention rules for this pipeline. Run:  pipeline review
 #
-# The bundled framework rules (microagent + gate + ECS conventions) live in the
-# 'pipeline' package's library/pipeline.code-review.yaml. These local rules can
-# add project-specifics.
+# The framework's shared rules (microagent + gate + ECS + schema/ACL conventions)
+# are INHERITED from the 'pipeline' dependency via the include below — no copy,
+# no symlink. They scan this project's source automatically. Add project-specific
+# rules under 'rules:' (redeclare an inherited rule's id there to override it).
+include:
+  - node_modules/pipeline/library/*.code-review.yaml
 
-- id: microagent-conventions
-  description: Microagents follow the focus-not-size MICROAGENT conventions.
-  matches:
-    - "microagents/**/*.coffee"
-  prompt: |
-    Use the read_file tool to read the conventions doc at:
-      node_modules/agl-ai/docs/MICROAGENT.md
-    The given file is a microagent. Return pass=false if it violates a
-    convention (e.g. more than one decision per wrapper, a bloated system
-    prompt, field semantics duplicated outside the output schema, deterministic
-    work done inside the model). Name the specific convention in the rationale.
+rules: []
 `)
 
   await file(root, 'README.md', `# ${name}

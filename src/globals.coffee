@@ -10,6 +10,7 @@
 import { resolve } from 'path'
 import { readFile } from 'fs/promises'
 import { createHash } from 'crypto'
+import { AsyncLocalStorage } from 'async_hooks'
 
 _ROOT = resolve(process.env.PIPELINE_ROOT or process.cwd())
 
@@ -28,6 +29,11 @@ _DIM   = '\x1b[2m'
 _idColor = (id) ->
   hash = createHash('sha1').update(String id).digest('hex')
   _PALETTE[parseInt(hash.slice(0, 4), 16) % _PALETTE.length]
+
+# Per-async-chain activity context. Survives await boundaries within ONE Promise
+# chain but does NOT bleed into sibling chains, so a multi-activity loop can run
+# its activities in parallel and still attribute logs/telemetry to the right one.
+_activityContext = new AsyncLocalStorage()
 
 export _G =
   ROOT:           _ROOT
@@ -55,7 +61,20 @@ export _G =
   # (so `agent.coffee --entity <id> --stage <name>` runs one stage on one entity).
   onlyEntity: null
 
+  # Multi-activity loop: run each tick's activities in parallel (true) or
+  # sequentially (false). Sequential gives predictable logs + no cross-activity
+  # contention; parallel halves wall-time per tick when activities are independent.
+  parallelActivities: true
+
   sleep: (ms) -> new Promise (res) -> setTimeout res, ms
+
+  # Activity context (AsyncLocalStorage). `withActivity` runs fn inside the named
+  # activity's context; `currentActivity` reads it back (null outside any). The
+  # multi-activity loop wraps each activity's stages in `withActivity`, so an
+  # overridden `_G.log` / Telemetry can tag output with the active activity even
+  # when activities run in parallel.
+  withActivity: (activityId, fn) -> _activityContext.run { activityId }, fn
+  currentActivity: -> _activityContext.getStore()?.activityId ? null
 
   # Reconfigure paths/knobs at startup. Recomputes derived dirs when ROOT changes.
   configure: (opts = {}) ->

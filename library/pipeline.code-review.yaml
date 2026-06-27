@@ -1,102 +1,174 @@
-# pipeline framework — shared code-review rules.
+# pipeline framework — shared LLM code-review rules.
 #
-# Copy/symlink this into a project as part of its rule set, or reference it from
-# the project's own .code-review.yaml. Each rule is one LLM evaluation per
-# matched file. These encode the architecture contract (see
-# node_modules/pipeline/docs/ARCHITECTURE.md) so an agent gets perfect-recall
-# reminders of any invariant it broke.
+# These encode the framework's architecture contract (ECS + microagents + gates
+# + schema/ACL) so an agent gets perfect-recall reminders of any invariant it
+# broke. They are meant to be INHERITED by any project built on `pipeline`, via
+# the `include:` key in the project's own .code-review.yaml — no symlinks:
+#
+#   # <project>/.code-review.yaml
+#   include:
+#     - node_modules/pipeline/library/*.code-review.yaml
+#   rules: []        # project-specific rules (and id overrides) go here
+#
+# (`pipeline new` scaffolds exactly that include. The included rules' globs and
+# read_file paths resolve against the CONSUMING project, so they apply to that
+# repo's source — run `code-review` / `pipeline review` from the project or
+# activity root that owns its node_modules.)
+#
+# Layout-agnostic globs: the framework is dual-mode (docs/ACTIVITY.md), so globs
+# are `**/`-anchored to match BOTH the legacy central layout (`systems/`,
+# `microagents/`, `schema/<entity>.yaml` at the project root) AND the
+# activity-first layout (`<activity>/systems/`, `<activity>/schema.yaml`, incl. a
+# `back/<activity>/…` front/back split). `node_modules/` and `shared/` (deps +
+# cross-activity helper dirs) are excluded everywhere.
 
-# ── Microagents ───────────────────────────────────────────────────────────────
+# ── Microagents (the focused subset of agents under */microagents/) ───────────
+# The conversational/multi-decision agents live under */agents/ (the superset)
+# and are intentionally OUTSIDE this glob; shared/ holds helpers, not agents.
 - id: pipeline-microagent-conventions
-  description: Microagents answer one question via one typed tool call; deterministic work stays outside. (Focus, not size.)
+  description: Microagents answer one question via one typed tool call; deterministic work stays outside the model. (Focus, not size.)
   matches:
-    - "microagents/**/*.coffee"
+    - "**/microagents/**/*.coffee"
+  exclude:
+    - "**/node_modules/**"
+    - "**/shared/**"
   prompt: |
     Use the read_file tool to read the conventions document at:
       node_modules/agl-ai/docs/MICROAGENT.md
+
     The given file is a microagent. A microagent's simplicity is about FOCUS,
     NOT SIZE. Judge it ONLY against the three load-bearing invariants:
       - SINGLE DECISION: one question, one Agent.factory, one run, one final
-        output tool call. (Multiple output-tool PARAMETERS are fine.)
-      - TYPED OUTPUT: the answer is a strongly-typed output-tool schema.
-      - DETERMINISTIC BOUNDARY: I/O, parsing, formatting, persistence, retries
-        live in the calling code, not inside the model.
-    Do NOT penalize a long system prompt, embedded guides, or context restated in
-    the prompt — an arbitrarily large, focused prompt is allowed. Minimal-prompt /
-    no-duplication is NOT a requirement. Return pass=true if the three invariants
-    hold; otherwise pass=false naming the broken invariant. Shared/helper modules
-    that register no microagent pass unless they clearly violate an invariant.
+        output tool call. (Multiple output-tool PARAMETERS are fine — they are
+        parts of one answer.)
+      - TYPED OUTPUT: the answer is a strongly-typed output-tool schema the
+        caller can consume directly.
+      - DETERMINISTIC BOUNDARY: I/O, parsing, formatting, persistence, and
+        retries live in the calling code, not inside the model.
+    Do NOT penalize a long system prompt, embedded guides/rulebooks/linter
+    findings, or context restated in the prompt — an arbitrarily large, focused
+    prompt is allowed and expected. Minimal-prompt / no-duplication is NOT a
+    requirement. A shared/helper module that registers no microagent passes
+    unless it clearly breaks an invariant.
+    Return pass=true if the three invariants hold; otherwise pass=false naming the
+    specific invariant broken in the rationale.
 
-# ── Gate logic ────────────────────────────────────────────────────────────────
+# ── Gate logic must go through the Gate(...) marker ───────────────────────────
 - id: pipeline-gate-logic-wrapped
-  description: Gate logic (selection predicates + processing guards) must go through the Gate(...) marker.
+  description: Gate logic (the Entity.query selection predicate + processing guards) must be wrapped in the Gate(...) marker.
   matches:
-    - "systems/**/*.coffee"
+    - "**/systems/**/*.coffee"
+  exclude:
+    - "**/node_modules/**"
+    - "**/shared/**"
   prompt: |
     Use the read_file tool to read node_modules/pipeline/docs/ARCHITECTURE.md
     (the "Gate logic" section) if present.
 
     Gate logic is the most safety-critical part of a system: it decides which
-    entities the system SELECTS and when it GUARDS (aborts) processing. The
+    entities the system SELECTS and when it GUARDS (aborts) processing one. The
     framework requires every piece of gate logic to be wrapped in the `Gate(...)`
     marker so it is enforceable, debuggable, and extractable into the docs —
     exactly as component access goes through validated component models.
 
     Return pass=false if this system contains gate logic NOT wrapped in `Gate`:
-      - an entity-SELECTION predicate (the callback to `World.Entity__find(...)`
-        or `.find(...)`) whose boolean is not wrapped in `Gate`;
-      - a processing GUARD (`continue if/unless …`, `break if/unless …`) whose
-        condition is not wrapped in `Gate`.
+      - the entity-SELECTION predicate (the callback passed to
+        `Entity.query activityId, (e) -> …`, or to the lower-level
+        `World.for(activityId).Entity__find(...)`) whose boolean is not wrapped
+        in `Gate`;
+      - a processing GUARD (`continue if/unless …`, `break if/unless …`,
+        `return … if/unless …`) whose condition is not wrapped in `Gate`.
     `Gate` may be called any number of times, anywhere in the system — it does
     NOT need to merge conditions. A line deliberately exempt may carry a trailing
-    `# gate:ignore`. Name each unwrapped gate line in the rationale.
+    `# gate:ignore`. Name each unwrapped gate line in the rationale; otherwise
+    return pass=true.
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Systems pull their own entities (never handed one) ────────────────────────
 - id: pipeline-system-pulls-not-pushed
-  description: Systems select their own entities via World.Entity__find; they are never handed entities.
+  description: A system selects the entities it operates on via Entity.query; it is never handed an entity or store.
   matches:
-    - "systems/**/*.coffee"
+    - "**/systems/**/*.coffee"
+  exclude:
+    - "**/node_modules/**"
+    - "**/shared/**"
   prompt: |
-    This file is a pipeline System. The framework contract (read
-    node_modules/pipeline/docs/ARCHITECTURE.md if needed) requires:
-      - the system QUERIES the world for the entities it operates on, via
-        _G.World.Entity__find(predicate) (archetype-style: by stage / component
-        presence) — it must NOT receive an `entity` or `store` as a parameter;
-      - it iterates at most _G.pipelineWidth entities per tick;
-      - it owns persistence: it calls Entity.transition / patch / merge etc.;
-      - per-entity work is wrapped so a failure calls Entity.recordError (and it
-        respects Entity.inBackoff), so one bad entity can't wedge the loop.
-    Return pass=false if the system takes pushed entities, ignores pipelineWidth,
-    or lacks per-entity error handling. Name the specific issue.
+    This file is a pipeline System. The ECS contract (read
+    node_modules/pipeline/docs/ARCHITECTURE.md if needed) requires the system to
+    SELECT the entities it works on — by querying the world via
+    `Entity.query activityId, (e) -> …` (archetype-style: by stage / component
+    presence) — and to gate on component state. It must NOT take an `entity` or
+    `store` as a function parameter and operate on it directly. `Entity.query`
+    owns the pipelineWidth cap and the per-entity hydrate/evict lifecycle, so the
+    system carries no load/evict bookkeeping; per-entity work should be wrapped so
+    a failure calls `Entity.recordError` (and respects `Entity.inBackoff`) and one
+    bad entity can't wedge the loop.
+    Return pass=false if the exported system function receives a pushed
+    entity/store, otherwise pass=true. Explain in the rationale.
 
-- id: pipeline-no-llm-judging-own-output
-  description: Maker ≠ Checker — a verify/judge system must use a different subject than the generator.
+# ── Component fields are mutated only through validated component models ───────
+- id: pipeline-component-access-via-model
+  description: Systems/agents mutate component fields through validated component-model setters, never by writing raw entity fields.
+  matches:
+    - "**/systems/**/*.coffee"
+    - "**/microagents/**/*.coffee"
+  exclude:
+    - "**/node_modules/**"
+    - "**/shared/**"
+  prompt: |
+    The given file is a pipeline System or microagent. It is CORRECT and expected
+    to:
+      - define a top-of-file constant `SYSTEM = 'system:<activity>/<basename>'`
+        (or, for an agent, `'agent:<activity>/<label>'`) and pass it — together
+        with the `activityId` and entity `id` — as the leading arguments to
+        component-model accessors, e.g.
+        `FetchComponent.status SYSTEM, activityId, id`;
+      - READ component values via those accessors to gate or drive its work;
+      - read `entity.<component>?.<field>` directly ONLY inside an `Entity.query`
+        / `World.for(...).Entity__find` predicate to decide which entities to
+        process.
+
+    Return pass=FALSE ONLY when the file actually breaks the contract, i.e. it
+    WRITES/MUTATES a component field by assigning directly onto a loaded entity
+    object (bypassing the component-model setter and its SchemaValidator.check) —
+    for example `entity.fetch.status = 'x'` followed by a raw `Entity.save`. Using
+    the component setters (e.g. `FetchComponent.setStatus SYSTEM, …`) is the
+    correct pattern and MUST pass. If you find no raw component-field mutation,
+    return pass=true; when you fail it, quote the exact offending assignment line.
+
+# ── Maker ≠ Checker (verify / judge / critic stages) ──────────────────────────
+- id: pipeline-maker-not-checker
+  description: A verify/judge/critic stage must not let a model grade its own output.
   severity: warn
   matches:
-    - "systems/**/*verify*.coffee"
-    - "systems/**/*review*.coffee"
-    - "systems/**/*judge*.coffee"
-    - "systems/**/*critic*.coffee"
+    - "**/systems/**/*verify*.coffee"
+    - "**/systems/**/*judge*.coffee"
+    - "**/systems/**/*critic*.coffee"
+    - "**/microagents/**/*verify*.coffee"
+    - "**/microagents/**/*judge*.coffee"
+    - "**/microagents/**/*compare*.coffee"
+  exclude:
+    - "**/node_modules/**"
+    - "**/shared/**"
   prompt: |
-    This file appears to be a verification / judge / critic system. The contract
+    This file is part of a verification / judging / comparison stage. The contract
     requires Maker ≠ Checker: the subject (and ideally the model) that GENERATED
     an artifact must not be the same one that grades it. Return pass=false if the
-    judging logic reuses the generator's subject identity or otherwise lets a
-    model grade its own output. Explain in the rationale.
+    judging logic reuses the converter/generator subject identity, or otherwise
+    lets a model assess its own output without an independent critic. Explain in
+    the rationale.
 
-# ── Schema discipline ─────────────────────────────────────────────────────────
-- id: pipeline-component-access-via-model
-  description: Application code accesses component fields through validated component models, not raw entity objects.
-  severity: warn
+# ── Schema discipline: every field declares a subjects[] allowlist ────────────
+- id: pipeline-schema-field-has-subjects
+  description: Every schema component field (and top-level scalar) declares a subjects[] allowlist.
   matches:
-    - "systems/**/*.coffee"
-    - "microagents/**/*.coffee"
+    - "**/schema.yaml"
+    - "**/schema/*.yaml"
+  exclude:
+    - "**/node_modules/**"
   prompt: |
-    The framework contract says systems/microagents should read and write
-    component FIELDS through their component-model accessors (which validate the
-    caller's subject against schema/*.yaml), not by reaching into raw entity
-    objects for field values. Reading `entity.workflow?._stage` to GATE in a
-    World.Entity__find predicate is fine. Mutating component field values by
-    directly assigning to a loaded entity object (bypassing the component model
-    and its SchemaValidator.check) is NOT. Return pass=false if you see field
-    MUTATIONS that bypass the component model, and name them.
+    This is an entity schema file (a per-activity `schema.yaml`, or a legacy
+    `schema/<entity>.yaml`). Per the framework's SCHEMA.md, EVERY field under
+    every component — and every top-level scalar — must declare a `subjects:`
+    allowlist of caller identities (`system:` / `agent:` / `route:` prefixes).
+    Return pass=false if any field or scalar is missing a non-empty `subjects:`
+    list, and name the offending field(s) in the rationale. Otherwise pass=true.

@@ -288,7 +288,6 @@ _changedKeys = (before, after) ->
 # ── the walk ─────────────────────────────────────────────────────────────────
 export runWalk = (opts = {}) ->
   argv            = opts.argv ? process.argv.slice(2)
-  activityStorage = opts.activityStorage ? null
   fallbackSystems = opts.systems ? null        # single-activity config projects
 
   flags = _parseArgs argv
@@ -360,7 +359,7 @@ export runWalk = (opts = {}) ->
     meter.start()
 
   runInActivity = (activityId, fn) ->
-    if activityStorage? then activityStorage.run { activityId }, fn else fn()
+    _G.withActivity activityId, fn
 
   stats =
     walked: 0

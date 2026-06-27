@@ -18,8 +18,10 @@ import chokidar from 'chokidar'
 import { _G } from './globals.coffee'
 import './world.coffee'
 import './entity.coffee'
+import { Activities } from './activities.coffee'
 import { loadConfig } from './config.coffee'
 import { runWalk } from './walk.coffee'
+import { Telemetry } from './telemetry.coffee'
 
 _ts = -> new Date().toLocaleTimeString('en-US', { hour12: false })
 _DIM = '\x1b[2m'; _RST = '\x1b[0m'; _GRN = '\x1b[32m'; _RED = '\x1b[31m'; _CYN = '\x1b[36m'; _BLD = '\x1b[1m'
@@ -94,45 +96,91 @@ _watchCode = (systems) ->
     else
       console.log "#{_DIM}#{_ts()}#{_RST} ♻️  #{_RED}reload skipped#{_RST} #{rel} #{_DIM}(restart to apply)#{_RST}"
 
-export runPipeline = (opts = {}) ->
-  { cfg, systems } = await loadConfig()
+# Convert a glob (only `*` wildcard) to a RegExp — the multi-activity --activity filter.
+_globToRegExp = (pattern) ->
+  escaped = pattern.replace /[-/\\^$+?.()|[\]{}]/g, '\\$&'
+  new RegExp '^' + escaped.replace(/\*/g, '.*') + '$'
 
-  # Resolve each configured system to its fn.
+_argValue = (argv, flag) ->
+  i = argv.indexOf flag
+  if i >= 0 then argv[i + 1] else null
+
+# Load + resolve the single-activity config.yaml systems list (fn attached).
+_resolveSystems = ->
+  { cfg, systems } = await loadConfig()
   for s in systems
     s.fn = await _importSystem s.name
+  { cfg, systems }
 
-  # Wire agl-ai defaults.
-  Agent.default.model = _G.MODEL if Agent?.default?
-  Agent.default.concurrency = _G.concurrency if Agent?.default?
+# Run one activity's ordered stages once, inside its activity context (so logs +
+# telemetry attribute correctly even under parallel execution). Field-index GC
+# (`evictHydrated`) runs at every stage boundary so a stage's full bodies live
+# only for that stage. A throwing system is logged and skipped (one bad entity
+# never wedges the loop).
+_runActivityStages = (activity) ->
+  _G.withActivity activity.id, ->
+    _G.log 'loop.start', { activity: activity.id }
+    try
+      for step in activity.pipeline
+        break if _G.quit
+        _G.currentSystem = step.name
+        stop = Telemetry.startTimer "stage.#{step.name}"
+        await step.fn()
+        _G.Entity.evictHydrated activity.id
+        stop()
+    catch err
+      _G.log 'loop.error', { activity: activity.id, error: err?.message ? String(err) }
+    _G.log 'loop.done', { activity: activity.id }
 
-  # ── Walk / F4 dev harness ───────────────────────────────────────────────────
-  # A selection of entities × a selection of stages, delegated to the shared
-  # runWalk engine (the `pipeline walk` CLI lands here too). Routed BEFORE any
-  # loop setup (no debug-log tee, no PID guard, no bulk init) so you can walk
-  # entities WHILE the long-running loop is running — it streams one at a time.
-  argv = opts.argv ? process.argv.slice(2)
-  if ['--entity', '--entities', '--stage', '--stages', '--once'].some((f) -> argv.includes f)
-    res = await runWalk { argv, systems }
-    await _G.Entity.stopWatching?()
-    process.exit(if res?.errors then 1 else 0)
+# ── Multi-activity loop (activity-first / activities/*.yaml projects) ──────────
+# Each tick runs every selected activity's declared pipeline. Activities run in
+# parallel by default (_G.parallelActivities) for independent throughput, or
+# sequentially for predictable logs. Opts into the field-index so a large corpus
+# stays memory-bounded (a no-op for activities that declare no GATE_FIELDS).
+_runMultiLoop = (allActivities, argv) ->
+  pattern = _argValue argv, '--activity'
+  matcher = if pattern then _globToRegExp pattern else null
+  activities = if matcher then allActivities.filter((a) -> matcher.test a.id) else allActivities
+  if pattern and activities.length is 0
+    console.error "#{_RED}--activity '#{pattern}' matched none of: #{allActivities.map((a) -> a.id).join ', '}#{_RST}"
+    process.exit 2
 
-  _teeDebugLog()
-  pidFile = await _pidGuard()
+  # Opt into the field-index so a large corpus stays memory-bounded (a no-op for
+  # activities that declare no GATE_FIELDS — they keep full-body selection).
+  _G.useFieldIndex = true
+  for activity in activities
+    await _G.Entity.init activity.id
 
-  _removePid = -> unlink(pidFile).catch ->
-  sigintCount = 0
-  process.on 'SIGINT', ->
-    sigintCount++
-    if sigintCount >= 2
-      console.log "\n#{_DIM}#{_ts()}#{_RST} Force quitting."
-      await _removePid()
-      process.exit 1
-    _G.quit = true
-    console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — finishing current iteration..."
-  process.on 'SIGTERM', -> _G.quit = true
+  console.log """
 
+  #{_BLD}#{_CYN}  🔁 agent pipeline#{_RST}#{_DIM}  #{activities.length} #{if activities.length is 1 then 'activity' else 'activities'}#{_RST}
+
+  #{_DIM}activities#{_RST} #{activities.map((a) -> a.id).join ' · '}
+  #{_DIM}model     #{_RST} #{_G.MODEL}
+  #{_DIM}mode      #{_RST} #{if _G.parallelActivities then 'parallel' else 'sequential'} #{_DIM}· field-index #{if _G.useFieldIndex then 'on' else 'off'}#{_RST}
+
+  #{_DIM}Ctrl+C to stop gracefully.#{_RST}
+  """
+
+  while not _G.quit
+    try
+      if _G.parallelActivities
+        await Promise.all(activities.map (a) -> _runActivityStages a)
+      else
+        for activity in activities
+          break if _G.quit
+          await _runActivityStages activity
+      Telemetry.report()
+      Telemetry.reset()
+    catch err
+      console.error "#{_RED}loop error:#{_RST}", err?.stack or err
+    break if _G.quit
+    await _G.sleep _G.loopIntervalMs
+
+# ── Single-activity loop (config.yaml `systems:` projects — the scaffold) ──────
+_runSingleLoop = (opts) ->
+  { cfg, systems } = await _resolveSystems()
   _watchCode systems unless opts.hotReload is false
-
   await _G.Entity.init 'default'
 
   console.log """
@@ -181,6 +229,57 @@ export runPipeline = (opts = {}) ->
 
     break if _G.quit
     await _G.sleep _G.loopIntervalMs
+
+# The one entry point a project's agent.coffee calls. DUAL-MODE:
+#   • MULTI-ACTIVITY — the Activities registry has activities with a non-empty
+#     pipeline (activity-first <id>/activity.yaml or legacy activities/*.yaml).
+#     Runs every selected activity's pipeline each tick (field-index on).
+#   • SINGLE-ACTIVITY — no such activities; systems come from config.yaml. The
+#     scaffold's shape (today's behavior, unchanged).
+# Either way, the walk/F4 flags short-circuit to runWalk first. The loop owns the
+# debug-log tee, PID guard, and graceful shutdown for both modes.
+export runPipeline = (opts = {}) ->
+  argv = opts.argv ? process.argv.slice(2)
+  await Activities.loadAll()
+  _G.Activities = Activities
+  multiActivities = Activities.all().filter (a) -> (a.pipeline?.length ? 0) > 0
+  isMulti = multiActivities.length > 0
+
+  # ── Walk / F4 dev harness (both modes) ──────────────────────────────────────
+  # A selection of entities × a selection of stages → the shared runWalk engine.
+  # Routed first, BEFORE any loop setup (no tee, no PID guard, no bulk init), so
+  # you can walk entities WHILE the long-running loop runs — it streams one at a
+  # time. runWalk is activity-aware; single-activity needs its config systems.
+  if ['--entity', '--entities', '--stage', '--stages', '--once'].some((f) -> argv.includes f)
+    walkSystems = if isMulti then null else (await _resolveSystems()).systems
+    res = await runWalk { argv, systems: walkSystems }
+    await _G.Entity.stopWatching?()
+    process.exit(if res?.errors then 1 else 0)
+
+  # Wire agl-ai defaults (both modes).
+  Agent.default.model = _G.MODEL if Agent?.default?
+  Agent.default.concurrency = _G.concurrency if Agent?.default?
+
+  _teeDebugLog()
+  pidFile = await _pidGuard()
+  _removePid = -> unlink(pidFile).catch ->
+
+  # Graceful shutdown (both modes): first Ctrl+C finishes the tick, second forces.
+  sigintCount = 0
+  process.on 'SIGINT', ->
+    sigintCount++
+    if sigintCount >= 2
+      console.log "\n#{_DIM}#{_ts()}#{_RST} Force quitting."
+      await _removePid()
+      process.exit 1
+    _G.quit = true
+    console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — finishing current iteration..."
+  process.on 'SIGTERM', -> _G.quit = true
+
+  if isMulti
+    await _runMultiLoop multiActivities, argv
+  else
+    await _runSingleLoop opts
 
   await _removePid()
   await _G.Entity.stopWatching?()

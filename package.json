@@ -14,6 +14,7 @@
     "./schema-validator": "./src/schema-validator.coffee",
     "./component": "./src/component.coffee",
     "./loop": "./src/loop.coffee",
+    "./telemetry": "./src/telemetry.coffee",
     "./register": "./register.mjs"
   },
   "bin": {

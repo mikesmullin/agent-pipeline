@@ -254,28 +254,45 @@ mod = await `import(moduleUrl)`
 
 ## 5 — The headless agent loop
 
-The general pipeline is **headless**. `agent.coffee` is a minimal driver that
-runs each activity's systems in order each tick:
+The general pipeline is **headless**, and the loop itself is **framework-owned**:
+a project's `agent.coffee` is a one-line driver that calls `runPipeline()`, which
+runs every activity's pipeline each tick. You do not hand-roll the loop.
 
 ```coffeescript
-await Activities.loadAll()
-for activity in Activities.all()
-  await _G.Entity.init activity.id
-
-while not _G.quit
-  for activity in Activities.all()
-    for step in activity.pipeline
-      await step.fn()
-  await _G.sleep LOOP_INTERVAL_MS
+# agent.coffee — the whole thing
+import { runPipeline } from 'pipeline'
+await runPipeline()
 ```
 
-Activities run **sequentially** within a tick by default (predictable logs,
-no cross-activity contention). Parallelism can be added as `Promise.all` over
-the activity loop without touching the systems.
+`runPipeline()` is **dual-mode** and auto-detects which loop to run:
+
+- **Multi-activity** — when the `Activities` registry has activities with a
+  non-empty pipeline (activity-first `<id>/activity.yaml` or legacy
+  `activities/*.yaml`). It `Entity.init`s each activity, opts into the
+  field-index (a no-op for activities that declare no `GATE_FIELDS`), and each
+  tick runs every activity's stages — in **parallel** by default
+  (`_G.parallelActivities`, set `false` for predictable sequential logs).
+  A `--activity <glob>` filter limits which activities run.
+- **Single-activity** — when there is no such registry (the scaffold's
+  `config.yaml` `systems:` list); runs that one pipeline each tick.
+
+Either way `runPipeline` owns the engine plumbing for both modes: the debug-log
+tee, the single-instance PID guard, graceful shutdown (first Ctrl+C finishes the
+tick, second forces), the field-index stage-boundary GC, and the
+walk/F4 debug harness (the `--entity/--entities/--stage/--stages/--once` flags
+short-circuit to `runWalk` before any loop setup — see ARCHITECTURE's `pipeline
+walk`). Each activity's stages run inside its **activity context**
+(`_G.withActivity` / `_G.currentActivity`), so an overridden `_G.log` and the
+`Telemetry` PERF tracer attribute output to the right activity even under
+parallel execution.
 
 The disk is authoritative: each stage commits via component setters, and the
 next stage re-reads from disk (the runtime SchemaValidator also reads
 `schema/*.yaml` on every call, so schema edits hot-reload).
+
+> A project that needs startup-time domain setup (extra `_G` fields, API
+> clients) keeps a thin `agent.coffee` that imports its globals module *before*
+> calling `runPipeline()`. Nothing else belongs in it.
 
 ---
 

@@ -16,7 +16,7 @@ conventions here are enforced two ways: structurally by the `SchemaValidator` +
 | **Component** | A named, typed bag of fields on an entity (`workflow`, `note`, …). | a top-level key in the entity YAML; declared in `schema/*.yaml` |
 | **System** | A function that advances entities through one stage. | `systems/<activity>/<name>.coffee` |
 | **Agent** (superset) | An LLM call. The **microagent** subset answers one question via one typed tool call. | `microagents/NN-name.coffee` (subset) · `agents/NN-name.coffee` (other agents) — see `MICROAGENT.md` |
-| **The loop** | The engine tick: runs systems in weight order every N ms. | `agent.coffee` → `runPipeline()` |
+| **The loop** | The engine tick: runs systems in weight order every N ms. Framework-owned (`runPipeline`), **dual-mode** — single-activity (`config.yaml`) or multi-activity (one tick per activity, parallel by default). | `agent.coffee` → `runPipeline()` |
 
 ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
 **S**ystems are the behavior, the loop is the frame tick.
