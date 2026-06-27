@@ -19,6 +19,7 @@ import { _G } from './globals.coffee'
 import './world.coffee'
 import './entity.coffee'
 import { loadConfig } from './config.coffee'
+import { runWalk } from './walk.coffee'
 
 _ts = -> new Date().toLocaleTimeString('en-US', { hour12: false })
 _DIM = '\x1b[2m'; _RST = '\x1b[0m'; _GRN = '\x1b[32m'; _RED = '\x1b[31m'; _CYN = '\x1b[36m'; _BLD = '\x1b[1m'
@@ -95,8 +96,6 @@ _watchCode = (systems) ->
 
 export runPipeline = (opts = {}) ->
   { cfg, systems } = await loadConfig()
-  _teeDebugLog()
-  pidFile = await _pidGuard()
 
   # Resolve each configured system to its fn.
   for s in systems
@@ -106,7 +105,19 @@ export runPipeline = (opts = {}) ->
   Agent.default.model = _G.MODEL if Agent?.default?
   Agent.default.concurrency = _G.concurrency if Agent?.default?
 
-  _watchCode systems unless opts.hotReload is false
+  # ── Walk / F4 dev harness ───────────────────────────────────────────────────
+  # A selection of entities × a selection of stages, delegated to the shared
+  # runWalk engine (the `pipeline walk` CLI lands here too). Routed BEFORE any
+  # loop setup (no debug-log tee, no PID guard, no bulk init) so you can walk
+  # entities WHILE the long-running loop is running — it streams one at a time.
+  argv = opts.argv ? process.argv.slice(2)
+  if ['--entity', '--entities', '--stage', '--stages', '--once'].some((f) -> argv.includes f)
+    res = await runWalk { argv, systems }
+    await _G.Entity.stopWatching?()
+    process.exit(if res?.errors then 1 else 0)
+
+  _teeDebugLog()
+  pidFile = await _pidGuard()
 
   _removePid = -> unlink(pidFile).catch ->
   sigintCount = 0
@@ -120,67 +131,9 @@ export runPipeline = (opts = {}) ->
     console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — finishing current iteration..."
   process.on 'SIGTERM', -> _G.quit = true
 
+  _watchCode systems unless opts.hotReload is false
+
   await _G.Entity.init 'default'
-
-  # ── F4: single-entity / single-stage dev harness ────────────────────────────
-  # `agent.coffee --entity <id> --stage <name> [--once]` runs ONE system pass
-  # (optionally just one stage), scoped to ONE entity, then prints the gate trace
-  # + the entity's component diff and exits — for walking a real entity through
-  # the pipeline by hand. `--once` (no entity/stage) runs the whole pipeline once.
-  argv = opts.argv ? process.argv.slice(2)
-  _arg = (flag) ->
-    i = argv.indexOf flag
-    if i >= 0 then (argv[i + 1] ? true) else null
-  onceEntity = _arg('--entity')
-  onceStage  = _arg('--stage')
-  onceFlag   = argv.includes('--once') or onceEntity? or onceStage?
-
-  if onceFlag
-    _snap = (id) ->
-      e = _G.World.for('default').get id
-      return null unless e
-      { _mtime, _path, rest... } = e
-      JSON.parse JSON.stringify rest
-    _G.onlyEntity = onceEntity if onceEntity?
-    runSystems = if onceStage? then systems.filter((s) -> s.name is onceStage) else systems
-    if onceStage? and runSystems.length is 0
-      console.error "#{_RED}no system named '#{onceStage}'. Available: #{systems.map((s) -> s.name).join ', '}#{_RST}"
-      await _removePid?(); process.exit 1
-    before = if onceEntity? then _snap(onceEntity) else null
-    gateStart = (_G.gateLog?.length) ? 0
-    console.log "#{_BLD}#{_CYN}▶ run-once#{_RST} #{_DIM}entity=#{onceEntity ? '(all)'} stage=#{onceStage ? '(all)'}#{_RST}\n"
-    for { name, fn } in runSystems
-      continue unless fn?
-      _G.currentSystem = name
-      t0 = Date.now()
-      try
-        await fn()
-        console.log "#{_GRN}✓#{_RST} #{name} #{_DIM}#{Date.now() - t0}ms#{_RST}"
-      catch err
-        console.error "#{_RED}✗ #{name}#{_RST}", err?.stack or err
-    if onceEntity?
-      # Gate trace for this entity (the "why selected / skipped" view).
-      trace = (_G.gateLog ? []).slice(gateStart).filter (g) -> String(g.entity) is String(onceEntity)
-      if trace.length
-        console.log "\n#{_BLD}gate trace#{_RST} #{_DIM}(#{onceEntity})#{_RST}"
-        for g in trace
-          mark = if g.passed then "#{_GRN}✓#{_RST}" else "#{_RED}✗#{_RST}"
-          console.log "  #{mark} #{_DIM}#{g.system}#{_RST} #{g.label ? ''}"
-      # Component diff.
-      after = _snap(onceEntity)
-      keys = [...new Set([...Object.keys(before ? {}), ...Object.keys(after ? {})])].sort()
-      changed = keys.filter (k) -> JSON.stringify(before?[k]) isnt JSON.stringify(after?[k])
-      console.log "\n#{_BLD}component diff#{_RST} #{_DIM}(#{onceEntity})#{_RST}"
-      if changed.length is 0
-        console.log "  #{_DIM}(no component changes)#{_RST}"
-      else
-        for k in changed
-          tag = if before?[k] is undefined then "#{_GRN}+#{_RST}" else if after?[k] is undefined then "#{_RED}-#{_RST}" else "#{_CYN}~#{_RST}"
-          console.log "  #{tag} #{k}"
-    await _removePid()
-    await _G.Entity.stopWatching?()
-    _G._codeWatcher?.close?()
-    process.exit 0
 
   console.log """
 

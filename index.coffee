@@ -15,6 +15,7 @@ import { _G, Entity, Activities, World, SchemaValidator, Component, defineCompon
 import { Gate, gateTrace } from './src/gate.coffee'
 import { loadConfig } from './src/config.coffee'
 import { runPipeline } from './src/loop.coffee'
+import { runWalk } from './src/walk.coffee'
 
-export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings, Gate, gateTrace, loadConfig, runPipeline }
+export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings, Gate, gateTrace, loadConfig, runPipeline, runWalk }
 export default _G

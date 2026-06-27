@@ -8,6 +8,7 @@
 //   pipeline review [--pr <url>]        run LLM code-review rules
 //   pipeline docs                       regenerate reference tables from schema
 //   pipeline run                        run the agent loop (bun agent.coffee)
+//   pipeline walk [selectors]           walk entities through stages (debug)
 //   pipeline status                     per-stage entity snapshot
 //   pipeline help
 
@@ -28,6 +29,11 @@ const HELP = `pipeline — agent-pipeline framework CLI
   pipeline review [--pr <url>] [args...]   run LLM code-review rules
   pipeline docs                            regenerate at-a-glance reference tables
   pipeline run [args...]                   run the agent loop (bun agent.coffee)
+  pipeline walk [selectors...]             walk a selection of entities through a
+                                           selection of stages (dev/debug harness)
+      --entity <id> | --entities <list|a..b|n..m>
+      --stage <name> | --stages <list|a..b>
+      --activity <glob>  --limit <n>  --verbose  --no-progress  --json
   pipeline status                          per-stage entity snapshot
   pipeline help
 `
@@ -46,6 +52,7 @@ try {
     case 'review':    await (await load('review'))(args); break
     case 'docs':      await (await load('docs'))(args); break
     case 'run':       await (await load('run'))(args); break
+    case 'walk':      await (await load('walk'))(args); break
     case 'status':    await (await load('status'))(args); break
     case 'help':
     case '--help':

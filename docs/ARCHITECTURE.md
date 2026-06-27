@@ -192,6 +192,14 @@ the runtime and `pipeline check` can resolve it.
   can't express; see `library/`).
 - `pipeline docs` — regenerates the at-a-glance tables (pipeline → stage →
   system → component → field → subject) from the schema.
+- `pipeline walk` — the dev/debug harness (not an enforcement tool): run a
+  **selection of entities** (`--entity` / `--entities <list|a..b|n..m>`) through a
+  **selection of stages** (`--stage` / `--stages <list|a..b>`), optionally scoped
+  by `--activity <glob>`. A single entity prints its gate trace + component diff;
+  many entities stream one at a time (bounded memory) under a live progress meter
+  (spinner, gradient bar, ETA). The fastest way to exercise gate logic + a stage
+  on real entities without running the full loop — and it runs safely while the
+  loop is running.
 
 See `SCHEMA.md` for the runtime persistence/component API, and the agent
 conventions in `node_modules/agl-ai/docs/MICROAGENT.md` (the single authoritative

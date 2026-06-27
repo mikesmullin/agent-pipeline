@@ -63,6 +63,17 @@ bun agent.coffee                          # start the loop (ticks every few seco
 echo "say hello" >> db/_drop.md           # hand it a unit of work
 ```
 
+Debug a stage without running the whole loop — **walk** a selection of entities
+through a selection of stages. A single entity prints its gate trace + component
+diff; many entities stream one at a time under a live progress meter (spinner,
+gradient bar, ETA):
+
+```sh
+pipeline walk --entity <id> --stage echoSystem        # one entity, one stage
+pipeline walk --entities 0..49 --stages ingest..echo  # a range × a range of stages
+pipeline walk                                         # all entities × all stages, once
+```
+
 Here's what the scaffold gives you, and the five ideas behind it:
 
 - **Entity** — one unit of work, stored as `db/<id>.yaml`. It's just an `id` plus
