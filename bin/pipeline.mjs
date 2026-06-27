@@ -22,7 +22,10 @@ const [, , cmd, ...args] = process.argv
 
 const HELP = `pipeline — agent-pipeline framework CLI
 
-  pipeline new <name>                      scaffold a new pipeline project
+  pipeline new <project> [--activity <id> [--stages a,b,c]] ...
+                                           scaffold a new activity-first project.
+                                           Repeat --activity to add activities;
+                                           --stages scopes to the current one.
   pipeline g <kind> <name>                 generate system|component|microagent
       (aliases: generate, g)
   pipeline check                           static schema/ACL linter (exit 1 on violation)

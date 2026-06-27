@@ -19,9 +19,10 @@ import { _G } from './globals.coffee'
 import './world.coffee'
 import './entity.coffee'
 import { Activities } from './activities.coffee'
-import { loadConfig } from './config.coffee'
+import { loadConfig, loadConfigKnobs } from './config.coffee'
 import { runWalk } from './walk.coffee'
 import { Telemetry } from './telemetry.coffee'
+import { RunMeter } from './console.coffee'
 
 _ts = -> new Date().toLocaleTimeString('en-US', { hour12: false })
 _DIM = '\x1b[2m'; _RST = '\x1b[0m'; _GRN = '\x1b[32m'; _RED = '\x1b[31m'; _CYN = '\x1b[36m'; _BLD = '\x1b[1m'
@@ -124,12 +125,19 @@ _runActivityStages = (activity) ->
       for step in activity.pipeline
         break if _G.quit
         _G.currentSystem = step.name
+        if _G.runStats?
+          _G.runStats.activity = activity.id
+          _G.runStats.stage = step.name
+          delete _G.runStats.stageCounts[step.name]   # reset this tick's count for the stage
+        stepStart = Date.now()
         stop = Telemetry.startTimer "stage.#{step.name}"
         await step.fn()
-        _G.Entity.evictHydrated activity.id
         stop()
+        _G.runStats?.stageMs[step.name] = Date.now() - stepStart
+        _G.Entity.evictHydrated activity.id
     catch err
       _G.log 'loop.error', { activity: activity.id, error: err?.message ? String(err) }
+    _G.runStats?.stage = null
     _G.log 'loop.done', { activity: activity.id }
 
 # ── Multi-activity loop (activity-first / activities/*.yaml projects) ──────────
@@ -162,8 +170,28 @@ _runMultiLoop = (allActivities, argv) ->
   #{_DIM}Ctrl+C to stop gracefully.#{_RST}
   """
 
+  # Live status line — spinner + tick + elapsed + activity›stage + queue depth +
+  # per-stage count·timing. Shared `_G.runStats` is mutated by the loop + _G.log.
+  stageNames = []
+  for a in activities
+    stageNames.push step.name for step in (a.pipeline ? []) when step.name not in stageNames
+  _G.runStats =
+    startedAt: Date.now()
+    tick: 0
+    activity: null
+    stage: null
+    total: 0
+    remaining: null
+    stageCounts: {}
+    stageMs: {}
+  meter = new RunMeter _G.runStats, stageNames
+  _G._runMeter = meter
+  meter.start()
+
   while not _G.quit
     try
+      _G.runStats.tick += 1
+      _G.runStats.total = (try (activities.reduce ((n, a) -> n + (_G.Entity.count?(a.id) ? 0)), 0) catch then _G.runStats.total)
       if _G.parallelActivities
         await Promise.all(activities.map (a) -> _runActivityStages a)
       else
@@ -173,13 +201,18 @@ _runMultiLoop = (allActivities, argv) ->
       Telemetry.report()
       Telemetry.reset()
     catch err
+      meter.clear()
       console.error "#{_RED}loop error:#{_RST}", err?.stack or err
     break if _G.quit
     await _G.sleep _G.loopIntervalMs
 
+  meter.stop()
+  _G._runMeter = null
+
 # ── Single-activity loop (config.yaml `systems:` projects — the scaffold) ──────
 _runSingleLoop = (opts) ->
   { cfg, systems } = await _resolveSystems()
+  _G.pipelineWidth = _G._widthOverride if _G._widthOverride?   # CLI --width wins over config
   _watchCode systems unless opts.hotReload is false
   await _G.Entity.init 'default'
 
@@ -244,6 +277,27 @@ export runPipeline = (opts = {}) ->
   _G.Activities = Activities
   multiActivities = Activities.all().filter (a) -> (a.pipeline?.length ? 0) > 0
   isMulti = multiActivities.length > 0
+
+  # Apply framework loop knobs from a root config.yaml if present (model /
+  # pipeline_width / loop_interval_ms / concurrency / retry / parallel_activities).
+  # Tolerant: multi-activity projects need no root config (defaults apply); the
+  # single-activity path re-reads it via loadConfig (which also loads `systems:`).
+  await loadConfigKnobs() if isMulti
+
+  # CLI override for pipeline width — `--width N` / `--pipeline-width N` wins over
+  # config.yaml so you can fan out (e.g. ingest + process N new entities per tick)
+  # without editing config. Applied for both loop modes; the single-activity path
+  # re-reads config later, so we stash the override and re-apply below too.
+  widthArg = _argValue(argv, '--width') ? _argValue(argv, '--pipeline-width')
+  if widthArg?
+    w = parseInt widthArg, 10
+    if Number.isFinite(w) and w > 0
+      _G.pipelineWidth = w
+      _G._widthOverride = w
+      console.log "#{_DIM}#{_ts()}#{_RST} #{_CYN}pipeline_width#{_RST} = #{w} #{_DIM}(CLI override)#{_RST}"
+    else
+      console.error "#{_RED}--width must be a positive integer (got '#{widthArg}')#{_RST}"
+      process.exit 2
 
   # ── Walk / F4 dev harness (both modes) ──────────────────────────────────────
   # A selection of entities × a selection of stages → the shared runWalk engine.

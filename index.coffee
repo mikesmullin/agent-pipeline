@@ -17,6 +17,7 @@ import { loadConfig } from './src/config.coffee'
 import { runPipeline } from './src/loop.coffee'
 import { runWalk } from './src/walk.coffee'
 import { Telemetry } from './src/telemetry.coffee'
+import { pMap } from './src/pmap.coffee'
 
-export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings, Gate, gateTrace, loadConfig, runPipeline, runWalk, Telemetry }
+export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings, Gate, gateTrace, loadConfig, runPipeline, runWalk, Telemetry, pMap }
 export default _G

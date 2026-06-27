@@ -46,21 +46,40 @@ bun link            # registers the global `pipeline` command + a linkable dep
 
 ## Build a pipeline
 
-This is the part worth reading. `pipeline new` scaffolds a complete, runnable
-project so you can see every concept in one place:
+This is the part worth reading. `pipeline new` scaffolds a complete, runnable,
+**activity-first** project so you can see every concept in one place. Everything
+is multi-activity — a single-activity project is just a one-item activity list,
+so the structure never changes when a second activity arrives.
 
 ```sh
-pipeline new my-agent
+# One activity named after the project, with your stages:
+pipeline new my-agent --activity notes --stages ingest,classify,publish
 cd my-agent
 bun link pipeline   # resolve `import … from 'pipeline'` to your local framework
 bun install
 ```
 
-You now have a working pipeline. Run it, then drop some work into its inbox:
+The CLI uses **ordered, repeatable scope flags**: each `--activity <id>` opens a
+scope, and the flags after it (e.g. `--stages a,b,c`) apply to that activity until
+the next `--activity`. Repeat to host several pipelines in one project:
+
+```sh
+pipeline new big \
+  --activity kibana --stages ingest,resolve,publish,verify,report \
+  --activity beam   --stages fetch,convert,publish
+```
+
+Each activity gets its own directory — `my-agent/<id>/{activity.yaml, schema.yaml,
+config.yaml, systems/<stage>.coffee, models/components/, microagents/, agents/,
+db/}`. One system file per stage, already chained. The project root holds
+`agent.coffee`, the loop-knobs `config.yaml`, and the shared `.code-review.yaml`.
+
+You now have a working pipeline. Run it, then drop some work into an activity's
+inbox:
 
 ```sh
 bun agent.coffee                          # start the loop (ticks every few seconds)
-echo "say hello" >> db/_drop.md           # hand it a unit of work
+echo "say hello" >> notes/db/_drop.md     # hand the 'notes' activity a unit of work
 ```
 
 Debug a stage without running the whole loop — **walk** a selection of entities
@@ -69,29 +88,30 @@ diff; many entities stream one at a time under a live progress meter (spinner,
 gradient bar, ETA):
 
 ```sh
-pipeline walk --entity <id> --stage echoSystem        # one entity, one stage
-pipeline walk --entities 0..49 --stages ingest..echo  # a range × a range of stages
-pipeline walk                                         # all entities × all stages, once
+pipeline walk --activity notes --entity <id> --stage classifySystem  # one entity, one stage
+pipeline walk --activity notes --entities 0..49 --stages ingest..publish
+pipeline walk --activity notes --once                                # all entities × all stages, once
 ```
 
 Here's what the scaffold gives you, and the five ideas behind it:
 
-- **Entity** — one unit of work, stored as `db/<id>.yaml`. It's just an `id` plus
-  whatever data has accreted onto it. The starter project turns each line you drop
-  into `db/_drop.md` into one entity.
+- **Entity** — one unit of work, stored as `<activity>/db/<id>.yaml`. It's just an
+  `id` plus whatever data has accreted onto it. The starter turns each line you
+  drop into `<activity>/db/_drop.md` into one entity.
 - **Component** — a named, typed bag of fields on an entity (the starter ships a
-  `note` component with `text` and `seen_at`). Components are declared once in
-  `schema/<entity>.yaml`, which is also where you list **who may touch each
+  `note` component with `text` and `processed_at`). Components are declared once
+  in `<activity>/schema.yaml`, which is also where you list **who may touch each
   field** — the access-control list the framework enforces.
 - **System** — a function that advances entities through one stage. A system
   *pulls* the entities it cares about (it queries the world; it's never handed
-  one), does deterministic work, and saves. The starter has two: `ingest` (drop
-  file → entity) and `echo` (stamp `seen_at`).
+  one), does deterministic work, and saves. The starter generates one per stage,
+  chained: the first ingests (drop file → entity), the rest advance by stage.
 - **Microagent** — the *only* place an LLM makes a decision: one question, one
   typed answer. The starter doesn't need one yet; you add them as the work gets
   subjective (`pipeline g microagent classify`).
-- **The loop** — `agent.coffee` is one line, `await runPipeline()`. It runs your
-  systems in order every tick. Nothing else lives in the loop body.
+- **The loop** — `agent.coffee` is one line, `await runPipeline()`. It discovers
+  every `<id>/activity.yaml` and runs each activity's pipeline every tick. Nothing
+  else lives in the loop body.
 
 Generate the next piece already wired to the schema and conventions:
 
@@ -131,18 +151,18 @@ import { _G } from 'pipeline'
 import { Entity } from 'pipeline'
 import { defineComponent } from 'pipeline'
 
-NoteComponent = defineComponent 'note', ['text', 'seen_at']
+NoteComponent = defineComponent 'note', ['text', 'processed_at']
 
-export echoSystem = ->
+export classifySystem = ->
   # Pull the entities this stage cares about (never get handed one).
-  targets = await Entity.query 'my-agent', (e) -> e.note? and not e.note.seen_at
+  targets = await Entity.query 'notes', (e) -> e.note? and not e.note.processed_at
   for entity in targets
-    await NoteComponent.setSeenAt 'system:my-agent/echo', 'my-agent', entity.id, new Date().toISOString()
+    await NoteComponent.setProcessedAt 'system:notes/classify', 'notes', entity.id, new Date().toISOString()
 ```
 
 That's the whole shape: `Entity` is disk-authoritative persistence,
-`defineComponent` gives you guarded accessors, and a project can host one
-**activity** or many (each its own entity kind, schema, and entity dir).
+`defineComponent` gives you guarded accessors, and a project hosts one or many
+**activities** (each its own entity kind, schema, and entity dir under `<id>/`).
 
 ## Documentation
 

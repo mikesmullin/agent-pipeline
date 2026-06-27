@@ -281,7 +281,10 @@ export default async function check() {
     const lines = text.split('\n')
 
     // Does this system use Entity.query, and are any of those lines opted out?
-    const queryLines = lines.filter(l => QUERY_RE.test(l))
+    // Ignore comment lines (CoffeeScript `# …`): prose that merely mentions
+    // Entity.query is not a query site and must not count toward the opt-out.
+    const isQueryLine = (l) => QUERY_RE.test(l) && !/^\s*#/.test(l)
+    const queryLines = lines.filter(isQueryLine)
     const usesQuery = queryLines.length > 0
     const allQueriesOptOut = usesQuery && queryLines.every(l => /#\s*index:ignore/.test(l))
 
@@ -315,7 +318,7 @@ export default async function check() {
     // the component fields it reads.
     const read = new Set()
     for (let i = 0; i < lines.length; i++) {
-      if (!QUERY_RE.test(lines[i])) continue
+      if (!isQueryLine(lines[i])) continue
       const baseIndent = lines[i].match(/^\s*/)[0].length
       for (let j = i + 1; j < lines.length; j++) {
         const ln = lines[j]

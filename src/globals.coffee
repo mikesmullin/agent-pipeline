@@ -11,6 +11,7 @@ import { resolve } from 'path'
 import { readFile } from 'fs/promises'
 import { createHash } from 'crypto'
 import { AsyncLocalStorage } from 'async_hooks'
+import { formatLogLine as _fmtLog } from './console.coffee'
 
 _ROOT = resolve(process.env.PIPELINE_ROOT or process.cwd())
 
@@ -57,6 +58,14 @@ export _G =
   quit: false
   currentEntityId: null
   currentSystem: null
+
+  # Live run telemetry for the loop status line (RunMeter reads this; the loop
+  # and _G.log mutate it). null until the multi-activity loop starts.
+  runStats: null
+  _runMeter: null
+  # Activity registry pointer (set by the loop / server at startup) so _G.log can
+  # read an activity's accentColor without a circular import.
+  Activities: null
   # F4 dev harness: when set, Entity.query restricts selection to this single id
   # (so `agent.coffee --entity <id> --stage <name>` runs one stage on one entity).
   onlyEntity: null
@@ -103,12 +112,25 @@ export _G =
       result = result.split(match[0]).join content
     result
 
-  log: (tag, data) ->
-    ts = new Date().toLocaleTimeString('en-US', { hour12: false })
-    idPart = if _G.currentEntityId
-      " #{_idColor _G.currentEntityId}[#{_G.currentEntityId}]#{_RESET}"
-    else ''
-    console.log "#{_DIM}[#{ts}]#{_RESET}#{idPart} #{tag}", if data then JSON.stringify(data) else ''
+  log: (label, data = {}) ->
+    ts = new Date().toISOString()
+    # Activity chip — color from the activity's accentColor (activity.yaml), else
+    # a stable hashed pastel. Read lazily via the _G.Activities pointer (set by
+    # the loop) to avoid a circular import with activities.coffee.
+    tag = null
+    activityId = _G.currentActivity?()
+    if activityId
+      color = try _G.Activities?.get?(activityId)?.accentColor catch then null
+      tag = { text: String(activityId).split('-')[0], color }
+    # Feed the live status line: a stage's `count`/`remaining` describe progress.
+    if _G.runStats?
+      st = _G.runStats.stage
+      _G.runStats.stageCounts[st] = data.count if st and typeof data?.count is 'number'
+      _G.runStats.remaining = data.remaining if typeof data?.remaining is 'number'
+    # Clear the status line so the scrolling log doesn't collide with it; the
+    # meter's next interval repaints below.
+    _G._runMeter?.clear?()
+    console.log _fmtLog ts, label, data, tag
 
   # Trace a step with an inline spinner-style ✓/✗. Returns fn()'s result.
   traceStep: (emoji, label, fn) ->
