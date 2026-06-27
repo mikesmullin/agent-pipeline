@@ -43,17 +43,43 @@ async function listCoffee(dir) {
   return out
 }
 
+// Discover ACTIVITY-FIRST activity dirs: each top-level dir holding an
+// `activity.yaml`. Skips `shared/` and dot-dirs. Returns absolute dir paths.
+async function discoverActivityFirst(root) {
+  const out = []
+  let entries
+  try { entries = await readdir(root, { withFileTypes: true }) } catch { return out }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    if (e.name.startsWith('.') || e.name === 'shared') continue
+    try { await stat(resolve(root, e.name, 'activity.yaml')); out.push(resolve(root, e.name)) } catch {}
+  }
+  return out
+}
+
 export default async function check() {
+  // ── Discover layout (legacy central vs activity-first) ──────────────────────
+  // DUAL-MODE: a project may use the legacy central layout (schema/, systems/,
+  // activities/) OR the activity-first layout (<activity>/{schema.yaml,systems,
+  // …,activity.yaml}); the two may coexist. We union the activity-first dirs in.
+  const activityDirs = await discoverActivityFirst(ROOT)
+
   // ── Load schemas ──────────────────────────────────────────────────────────
-  let schemaFiles
-  try { schemaFiles = (await readdir(SCHEMA_DIR)).filter(f => f.endsWith('.yaml')) }
-  catch { console.error(`${R}No schema/ dir found at ${SCHEMA_DIR}${X}`); process.exit(1) }
-  if (!schemaFiles.length) { console.error(`${R}No schema files in ${SCHEMA_DIR}${X}`); process.exit(1) }
+  // Prefer the legacy central schema/*.yaml; fall back to activity-first
+  // <activity>/schema.yaml when there is no central schema dir.
+  let schemaPaths = []
+  try { schemaPaths = (await readdir(SCHEMA_DIR)).filter(f => f.endsWith('.yaml')).map(f => resolve(SCHEMA_DIR, f)) } catch {}
+  if (schemaPaths.length === 0) {
+    for (const d of activityDirs) {
+      const p = resolve(d, 'schema.yaml')
+      try { await stat(p); schemaPaths.push(p) } catch {}
+    }
+  }
+  if (!schemaPaths.length) { console.error(`${R}No schema files found (schema/*.yaml or <activity>/schema.yaml)${X}`); process.exit(1) }
 
   const components = {}   // name → { fields: {f:{subjects[]}}, schemaFile }
   const scalars = {}
-  for (const f of schemaFiles) {
-    const path = resolve(SCHEMA_DIR, f)
+  for (const path of schemaPaths) {
     const data = yamlLoad(await readFile(path, 'utf8')) ?? {}
     for (const [cname, c] of Object.entries(data.components ?? {})) {
       const existing = components[cname]
@@ -99,7 +125,7 @@ export default async function check() {
     if (accessorMap[cls]) accessorMap[cls].methods[method] = Array.isArray(fields) ? fields : [fields]
   }
 
-  console.log(`Schema files: ${schemaFiles.map(f => `schema/${f}`).join(', ')}\n`)
+  console.log(`Schema files: ${schemaPaths.map(p => p.replace(ROOT + '/', '')).join(', ')}\n`)
 
   // ── Scan source ─────────────────────────────────────────────────────────────
   // systems/ + microagents/ + agents/ (the agent superset) are the standard
@@ -110,10 +136,20 @@ export default async function check() {
     ...await listCoffee(resolve(ROOT, 'microagents')),
     ...await listCoffee(resolve(ROOT, 'agents')),
   ]
+  for (const d of activityDirs) {
+    sourceFiles.push(...await listCoffee(resolve(d, 'systems')))
+    sourceFiles.push(...await listCoffee(resolve(d, 'microagents')))
+    sourceFiles.push(...await listCoffee(resolve(d, 'agents')))
+  }
   for (const extra of ['server.coffee']) {
     const p = resolve(ROOT, extra)
     try { await stat(p); sourceFiles.push(p) } catch {}
   }
+
+  // The system .coffee files (legacy systems/ + each activity-first
+  // <activity>/systems/) — the gate-wrapper + GATE_FIELDS passes scan these.
+  const systemFiles = [...await listCoffee(resolve(ROOT, 'systems'))]
+  for (const d of activityDirs) systemFiles.push(...await listCoffee(resolve(d, 'systems')))
 
   // ── Activity-template expansion ─────────────────────────────────────────────
   // A shared route/agent handler may build its subject as a template, e.g.
@@ -126,6 +162,9 @@ export default async function check() {
   for (const f of (await readdir(resolve(ROOT, 'activities')).catch(() => []))) {
     if (!f.endsWith('.yaml')) continue
     try { const c = yamlLoad(await readFile(resolve(ROOT, 'activities', f), 'utf8')); if (c?.id) activityIds.push(c.id) } catch {}
+  }
+  for (const d of activityDirs) {
+    try { const c = yamlLoad(await readFile(resolve(d, 'activity.yaml'), 'utf8')); if (c?.id) activityIds.push(c.id) } catch {}
   }
   const expandSubject = (subject) => {
     if (!/[#$]\{activityId\}/.test(subject)) return [subject]
@@ -192,7 +231,7 @@ export default async function check() {
   let gateViolations = 0
   const GUARD_RE = /\b(continue|break)\b.*\b(if|unless)\b|\breturn\s+false\b.*\b(if|unless)\b/
   const FIND_RE = /\b(Entity\.query|Entity__find|\.find)\s*\(?\s*\(?\s*(\(?\w*\)?)\s*->/
-  for (const file of await listCoffee(resolve(ROOT, 'systems'))) {
+  for (const file of systemFiles) {
     const text = await readFile(file, 'utf8').catch(() => null)
     if (text == null) continue
     const rel = file.replace(ROOT + '/', '')
@@ -235,7 +274,7 @@ export default async function check() {
   let indexErrors = 0
   const GATE_FIELDS_RE = /export\s+GATE_FIELDS\s*=\s*\[([^\]]*)\]/
   const QUERY_RE = /\bEntity\.query\b/
-  for (const file of await listCoffee(resolve(ROOT, 'systems'))) {
+  for (const file of systemFiles) {
     const text = await readFile(file, 'utf8').catch(() => null)
     if (text == null) continue
     const rel = file.replace(ROOT + '/', '')

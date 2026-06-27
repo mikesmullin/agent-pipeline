@@ -6,9 +6,11 @@
   "main": "index.coffee",
   "exports": {
     ".": "./index.coffee",
+    "./data": "./src/data.coffee",
     "./globals": "./src/globals.coffee",
     "./entity": "./src/entity.coffee",
     "./world": "./src/world.coffee",
+    "./activities": "./src/activities.coffee",
     "./schema-validator": "./src/schema-validator.coffee",
     "./component": "./src/component.coffee",
     "./loop": "./src/loop.coffee",

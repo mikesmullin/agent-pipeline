@@ -49,79 +49,146 @@ _synthDefault = ->
   jsonStringFields: []
   synthesized:      true
 
+# Discover ACTIVITY-FIRST projects: each top-level dir holding an `activity.yaml`
+# is one activity (its dir name is the on-disk grouping; the manifest's `id:` is
+# still the canonical id). `shared/` and dot-dirs are skipped (no activity.yaml
+# anyway, but skipped cheaply). Returns [{ name, dir }].
+_discoverActivityFirst = (root) ->
+  out = []
+  try
+    entries = readdirSync root, { withFileTypes: true }
+  catch
+    return out
+  for ent in entries when ent.isDirectory()
+    name = ent.name
+    continue if name.startsWith '.'
+    continue if name is 'shared'
+    out.push { name, dir: resolve(root, name) } if existsSync resolve(root, name, 'activity.yaml')
+  out
+
+# Build one loaded-activity object from a parsed manifest + a layout context that
+# tells it WHERE each referenced module lives (legacy central layout vs the
+# activity-first per-dir layout). Shared by both branches of loadAll so the two
+# layouts behave identically once resolved. `ctx`:
+#   systemModulePath(moduleName) -> abs path to a system module
+#   microagentModulePath(name)   -> abs path to a microagent module
+#   resolveAgent(entry)          -> { name, abs } for an agent (string or {name,path})
+#   entityDirBase                -> base dir for the (default or manifest) entityDir
+#   defaultEntityDir             -> entityDir relative to base when manifest omits it
+#   schemaFile / configFile / docsDir -> resolved abs paths (or null)
+_buildActivity = (cfg, ctx) ->
+  pipelineFns = []
+  indexFields = new Set()       # union of every system's GATE_FIELDS (the activity index)
+  anyDeclared = false
+  for sysName in (cfg.pipeline ? [])
+    moduleName = _systemNameToFile sysName
+    modulePath = ctx.systemModulePath moduleName
+    mod = await `import(pathToFileURL(modulePath).href)`
+    fn = mod[sysName] ? mod.default
+    unless typeof fn is 'function'
+      throw new Error "activity #{cfg.id}: #{modulePath} does not export #{sysName}"
+    pipelineFns.push { name: sysName, fn }
+    # GATE_FIELDS union → the World projection (field-index). See ARCHITECTURE #14.
+    if Array.isArray mod.GATE_FIELDS
+      anyDeclared = true
+      indexFields.add f for f in mod.GATE_FIELDS
+  # Microagents (legacy string form) — register-on-import side effect.
+  for maName in (cfg.microagents ? [])
+    await `import(pathToFileURL(ctx.microagentModulePath(maName)).href)`
+  # Agents (superset): { name, path } or bare string shorthand.
+  agentLabels = []
+  for entry in (cfg.agents ? [])
+    { name: agentName, abs } = ctx.resolveAgent entry
+    await `import(pathToFileURL(abs).href)`
+    agentLabels.push agentName
+  {
+    id:               cfg.id
+    name:             cfg.name
+    description:      cfg.description
+    schemaFile:       ctx.schemaFile
+    entityDir:        resolve ctx.entityDirBase, (cfg.entityDir ? ctx.defaultEntityDir)
+    configFile:       ctx.configFile
+    docsDir:          ctx.docsDir
+    themeColor:       cfg.themeColor
+    accentColor:      cfg.accentColor
+    stages:           cfg.stages ? []
+    pipeline:         pipelineFns
+    # Field-index: union of pipeline systems' GATE_FIELDS, or null when none
+    # declared (→ unindexed / full-body mode). Consumed by Entity in index mode.
+    _indexFields:     (if anyDeclared then indexFields else null)
+    microagents:      cfg.microagents ? []
+    agents:           agentLabels
+    jsonStringFields:        cfg.jsonStringFields ? []
+    publishJsonStringFields: cfg.publishJsonStringFields ? []
+    # Known optional/extension fields (consumers may use these in their UI).
+    mascotDir:        cfg.mascotDir
+    avatarName:       cfg.avatarName
+    entityNoun:       cfg.entityNoun or 'entity'
+  }
+
 export class Activities
   @_registry = null
 
-  # Load every activities/*.yaml (or synthesize a default), resolve absolute
+  # Load every activity manifest (or synthesize a default), resolve absolute
   # paths, and dynamically import each activity's systems + microagents + agents.
   # Idempotent: returns the cached registry on subsequent calls.
+  #
+  # DUAL-MODE — supports BOTH layouts:
+  #   • LEGACY central:  activities/<id>.yaml + systems/<id>/ + microagents/<id>/
+  #     + schema/<id>.yaml + db/entities/<id>/.
+  #   • ACTIVITY-FIRST:  <activityDir>/activity.yaml + <activityDir>/{systems,
+  #     microagents,agents}/ + <activityDir>/schema.yaml + <activityDir>/db/.
+  # A project with neither is single-activity (synthesized `default`). The two
+  # may coexist (e.g. during a migration); both are merged into one registry.
   @loadAll: ->
     return @_registry if @_registry?
-    dir = resolve _G.ROOT, 'activities'
-    unless existsSync dir
+    legacyDir   = resolve _G.ROOT, 'activities'
+    hasLegacy   = existsSync legacyDir
+    activityFirst = _discoverActivityFirst _G.ROOT
+    unless hasLegacy or activityFirst.length > 0
       # Single-activity project: synthesize the default activity.
       @_registry = { "#{DEFAULT_ACTIVITY_ID}": _synthDefault() }
       return @_registry
 
     out = {}
-    for file in readdirSync(dir) when file.endsWith '.yaml'
-      cfg = yamlLoad readFileSync(resolve(dir, file), 'utf8')
-      throw new Error "activity file #{file} missing `id`" unless cfg.id
-      pipelineFns = []
-      indexFields = new Set()       # union of every system's GATE_FIELDS (the activity index)
-      anyDeclared = false
-      for sysName in (cfg.pipeline ? [])
-        moduleName = _systemNameToFile sysName
-        modulePath = resolve _G.ROOT, "systems/#{cfg.id}/#{moduleName}.coffee"
-        mod = await `import(pathToFileURL(modulePath).href)`
-        fn = mod[sysName] ? mod.default
-        unless typeof fn is 'function'
-          throw new Error "activity #{cfg.id}: systems/#{cfg.id}/#{moduleName}.coffee does not export #{sysName}"
-        pipelineFns.push { name: sysName, fn }
-        # GATE_FIELDS: the component dot-fields this system's gate predicate reads.
-        # Their union across the pipeline is what the World projection must carry
-        # (see the field-index feature). A system with no gate (e.g. a reporter)
-        # may omit it; an activity where NO system declares any stays unindexed
-        # (full-body mode), preserving back-compat.
-        if Array.isArray mod.GATE_FIELDS
-          anyDeclared = true
-          indexFields.add f for f in mod.GATE_FIELDS
-      # Microagents (legacy string form) — register-on-import side effect.
-      for maName in (cfg.microagents ? [])
-        await `import(pathToFileURL(resolve(_G.ROOT, "microagents/#{cfg.id}/#{maName}.coffee")).href)`
-      # Agents (superset): { name, path } or bare string shorthand.
-      agentLabels = []
-      for entry in (cfg.agents ? [])
-        { name: agentName, path: agentRelPath } =
+
+    # ── Legacy central layout: activities/<id>.yaml ──────────────────────────
+    if hasLegacy
+      for file in readdirSync(legacyDir) when file.endsWith '.yaml'
+        cfg = yamlLoad readFileSync(resolve(legacyDir, file), 'utf8')
+        throw new Error "activity file #{file} missing `id`" unless cfg.id
+        out[cfg.id] = await _buildActivity cfg,
+          systemModulePath:     (moduleName) -> resolve _G.ROOT, "systems/#{cfg.id}/#{moduleName}.coffee"
+          microagentModulePath: (name) -> resolve _G.ROOT, "microagents/#{cfg.id}/#{name}.coffee"
+          resolveAgent: (entry) ->
+            if typeof entry is 'string'
+              { name: entry, abs: resolve(_G.ROOT, "agents/#{cfg.id}/#{entry}.coffee") }
+            else
+              { name: entry.name, abs: resolve(_G.ROOT, entry.path) }
+          entityDirBase:    _G.ROOT
+          defaultEntityDir: "db/entities/#{cfg.id}"
+          schemaFile:       (if cfg.schemaFile then resolve(_G.ROOT, cfg.schemaFile) else null)
+          configFile:       (if cfg.configFile then resolve(_G.ROOT, cfg.configFile) else null)
+          docsDir:          (if cfg.docsDir then resolve(_G.ROOT, cfg.docsDir) else null)
+
+    # ── Activity-first layout: <activityDir>/activity.yaml ───────────────────
+    for { dir } in activityFirst
+      cfg = yamlLoad readFileSync(resolve(dir, 'activity.yaml'), 'utf8')
+      throw new Error "activity-first dir #{dir}: activity.yaml missing `id`" unless cfg.id
+      out[cfg.id] = await _buildActivity cfg,
+        systemModulePath:     (moduleName) -> resolve dir, "systems/#{moduleName}.coffee"
+        microagentModulePath: (name) -> resolve dir, "microagents/#{name}.coffee"
+        resolveAgent: (entry) ->
           if typeof entry is 'string'
-            { name: entry, path: "agents/#{cfg.id}/#{entry}.coffee" }
-          else entry
-        await `import(pathToFileURL(resolve(_G.ROOT, agentRelPath)).href)`
-        agentLabels.push agentName
-      out[cfg.id] =
-        id:               cfg.id
-        name:             cfg.name
-        description:      cfg.description
-        schemaFile:       if cfg.schemaFile then resolve(_G.ROOT, cfg.schemaFile) else null
-        entityDir:        resolve _G.ROOT, (cfg.entityDir ? "db/entities/#{cfg.id}")
-        configFile:       if cfg.configFile then resolve(_G.ROOT, cfg.configFile) else null
-        docsDir:          if cfg.docsDir then resolve(_G.ROOT, cfg.docsDir) else null
-        themeColor:       cfg.themeColor
-        accentColor:      cfg.accentColor
-        stages:           cfg.stages ? []
-        pipeline:         pipelineFns
-        # Field-index: the union of pipeline systems' GATE_FIELDS (a Set of
-        # `<component>.<field>` dot-paths), or null when no system declares any
-        # (→ unindexed / full-body mode). Consumed by Entity in index mode.
-        _indexFields:     (if anyDeclared then indexFields else null)
-        microagents:      cfg.microagents ? []
-        agents:           agentLabels
-        jsonStringFields:        cfg.jsonStringFields ? []
-        publishJsonStringFields: cfg.publishJsonStringFields ? []
-        # Known optional/extension fields (consumers may use these in their UI).
-        mascotDir:        cfg.mascotDir
-        avatarName:       cfg.avatarName
-        entityNoun:       cfg.entityNoun or 'entity'
+            { name: entry, abs: resolve(dir, "agents/#{entry}.coffee") }
+          else
+            { name: entry.name, abs: resolve(dir, entry.path) }
+        entityDirBase:    dir
+        defaultEntityDir: 'db'
+        schemaFile:       (if cfg.schemaFile then resolve(dir, cfg.schemaFile) else resolve(dir, 'schema.yaml'))
+        configFile:       (if cfg.configFile then resolve(dir, cfg.configFile) else resolve(dir, 'config.yaml'))
+        docsDir:          (if cfg.docsDir then resolve(dir, cfg.docsDir) else resolve(dir, 'docs'))
+
     @_registry = out
     out
 

@@ -165,9 +165,51 @@ eq(W.get(fx).note.seen_at, undefined, 'evictHydrated re-projected the entity')
 ok(W.get(fx)._full !== true, 'evicted entity is a projection, not full')
 _G.useFieldIndex = false
 
+console.log('Activity-first layout (dual-mode discovery)')
+// A SEPARATE project root using the activity-first layout: <activity>/{activity
+// .yaml, schema.yaml, config.yaml, systems/, db/}. Assert Activities.loadAll
+// discovers it by glob and resolves per-activity paths; assert SchemaValidator
+// reads the per-activity schema (no central schema/ dir).
+const root2 = mkdtempSync(resolve(tmpdir(), 'pipeline-af-'))
+mkdirSync(resolve(root2, 'myact', 'systems'), { recursive: true })
+mkdirSync(resolve(root2, 'myact', 'db'), { recursive: true })
+writeFileSync(resolve(root2, 'myact', 'activity.yaml'), `id: myact
+name: My Activity
+stages: [original, done]
+pipeline:
+  - echoSystem
+`)
+writeFileSync(resolve(root2, 'myact', 'config.yaml'), `name: My Activity\npipeline_width: 2\n`)
+writeFileSync(resolve(root2, 'myact', 'schema.yaml'), `entity: myact
+components:
+  note:
+    fields:
+      text:
+        type: string
+        subjects: [system:myact/echo]
+`)
+writeFileSync(resolve(root2, 'myact', 'systems', 'echo.coffee'), `export GATE_FIELDS = ['note.text']
+export echoSystem = -> undefined
+`)
+_G.configure({ root: root2 })
+Activities.reset()
+await Activities.loadAll()
+ok(Activities.ids().includes('myact'), 'loadAll discovers activity-first dir by glob')
+const A = Activities.get('myact')
+eq(A.entityDir, resolve(root2, 'myact', 'db'), 'entityDir defaults to <activity>/db')
+eq(A.schemaFile, resolve(root2, 'myact', 'schema.yaml'), 'schemaFile defaults to <activity>/schema.yaml')
+eq(A.configFile, resolve(root2, 'myact', 'config.yaml'), 'configFile defaults to <activity>/config.yaml')
+eq(A.pipeline.length, 1, 'pipeline resolved one system')
+eq(A.pipeline[0].name, 'echoSystem', 'system fn resolved by name')
+ok(A._indexFields instanceof Set && A._indexFields.has('note.text'), 'GATE_FIELDS union → activity index')
+const afSchema = SchemaValidator._loadAll()
+ok(afSchema.components.note?.fields?.text?.subjects?.includes('system:myact/echo'), 'SchemaValidator reads per-activity schema.yaml')
+Activities.reset()
+
 // Cleanup
 await Entity.stopWatching()
 rmSync(root, { recursive: true, force: true })
+rmSync(root2, { recursive: true, force: true })
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail > 0 ? 1 : 0)

@@ -3,6 +3,11 @@
 How entities are stored, loaded, mutated, and queried at runtime. Read
 `ARCHITECTURE.md` first for the contract; this is the API reference.
 
+> **Import surface.** Everything in this doc is the **DATA tier** — importable
+> from either `pipeline` (the agent) or `pipeline/data` (a thin client / UI). The
+> ECS-only orchestration (`Gate` / `runPipeline`) lives only in `pipeline`. See
+> ARCHITECTURE.md § "Package surface (two tiers)".
+
 > **Activity-scoped.** Every `Entity` / `World` / component accessor takes the
 > **`activityId` first** (a project hosts one or many activities — see
 > `ACTIVITY.md`). Single-activity projects pass the synthesized `'default'`

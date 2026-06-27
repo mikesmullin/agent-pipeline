@@ -2,23 +2,19 @@
 #
 # Single import surface for projects that depend on the framework:
 #
-#   import { _G, Entity, World, SchemaValidator, Component, defineComponent,
-#            runPipeline, Agent } from 'pipeline'
+#   import { _G, Entity, Activities, World, SchemaValidator, Component,
+#            defineComponent, runPipeline, Agent } from 'pipeline'
 #
-# See docs/ARCHITECTURE.md for the contract these primitives enforce.
+# Two tiers (see docs/ARCHITECTURE.md):
+#   • `pipeline/data` — the DATA / ORM surface (per-id IO + Activities + ACL).
+#     A thin client (UI) imports ONLY this; it knows nothing about stages.
+#   • `pipeline` (here) — DATA tier PLUS the ECS / orchestration tier
+#     (Gate / gateTrace / loadConfig / runPipeline). The agent imports this.
 import Agent from 'agl-ai'
-import { _G } from './src/globals.coffee'
-import './src/world.coffee'
-import { Entity } from './src/entity.coffee'
-import { Activities } from './src/activities.coffee'
-import { SchemaValidator } from './src/schema-validator.coffee'
-import { Component, defineComponent } from './src/component.coffee'
+import { _G, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings } from './src/data.coffee'
 import { Gate, gateTrace } from './src/gate.coffee'
-import { normalizeStrings } from './src/normalize.coffee'
 import { loadConfig } from './src/config.coffee'
 import { runPipeline } from './src/loop.coffee'
 
-World = _G.World
-
-export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, Gate, gateTrace, normalizeStrings, loadConfig, runPipeline }
+export { _G, Agent, Entity, Activities, World, SchemaValidator, Component, defineComponent, normalizeStrings, Gate, gateTrace, loadConfig, runPipeline }
 export default _G

@@ -90,6 +90,58 @@ agent.coffee                      ← the headless loop driver (runPipeline)
 
 ---
 
+## 2a — Activity-first layout (the grouped alternative)
+
+The framework also supports an **activity-first** layout that groups *everything
+for one activity under a single directory* — instead of namespacing each kind
+(`systems/<id>/`, `schema/<id>.yaml`, `db/entities/<id>/`) by activity. The two
+layouts are equivalent to the framework (it is **dual-mode** — it discovers and
+loads both, and they may even coexist during a migration); pick whichever reads
+better for your project. Activity-first scales nicely when activities are
+genuinely independent (separate teams, schemas, entity stores).
+
+```
+<project root>/
+  <activity-id>/                  ← one directory per activity (the grouping)
+    activity.yaml                 ← the manifest (id, stages, pipeline, agents)
+    schema.yaml                   ← per-activity schema (component + ACL)
+    config.yaml                   ← per-activity runtime knobs
+    systems/   fetch.coffee … publish.coffee
+    microagents/  01-….coffee
+    agents/    02-chat.coffee
+    docs/      PIPELINE.md (generated)
+    db/        <entity>.yaml       ← per-activity entity files (source of truth)
+  shared/                         ← cross-activity helpers (NOT an activity; skipped)
+  agent.coffee                    ← the headless loop driver
+```
+
+**Discovery (zero-config, by glob).** `Activities.loadAll()` treats every
+top-level directory that contains an `activity.yaml` as one activity (`shared/`
+and dot-dirs are skipped). When the manifest omits a path, these **defaults**
+apply, all resolved relative to the activity directory:
+
+| Manifest field | Activity-first default |
+|---|---|
+| `entityDir` | `<activity>/db` |
+| `schemaFile` | `<activity>/schema.yaml` |
+| `configFile` | `<activity>/config.yaml` |
+| `docsDir` | `<activity>/docs` |
+| systems | `<activity>/systems/<module>.coffee` |
+| microagents | `<activity>/microagents/<name>.coffee` |
+| agents (bare string) | `<activity>/agents/<name>.coffee` |
+
+So a minimal `activity.yaml` need only declare `id`, `name`, `stages`,
+`pipeline`, and `agents` — the rest is inferred from the directory.
+
+**Tooling is layout-agnostic.** `SchemaValidator` unions every activity's
+`schema.yaml` (just as it unions the legacy central `schema/*.yaml`), and
+`pipeline check` scans each `<activity>/{systems,microagents,agents}` and reads
+each `<activity>/schema.yaml`. The legacy central layout (§2) keeps working
+unchanged; if a project has a central `schema/` dir or an `activities/` dir, that
+takes precedence and the activity-first scan is additive.
+
+---
+
 ## 3 — The activity manifest
 
 `activities/<id>.yaml` is the single declarative description of an activity.
@@ -145,10 +197,10 @@ themeColor:  '#6366f1'
 | `id` | yes | standard | Activity id used everywhere. From this key, **not** the filename. |
 | `name` | yes | standard | Human label. |
 | `description` | no | standard | Free text. |
-| `schemaFile` | yes | standard | Path to the entity schema. |
-| `entityDir` | yes | standard | Where entity YAMLs persist. |
-| `configFile` | yes | standard | Per-activity runtime config. |
-| `docsDir` | yes | standard | Per-activity docs dir. |
+| `schemaFile` | yes¹ | standard | Path to the entity schema. |
+| `entityDir` | yes¹ | standard | Where entity YAMLs persist. |
+| `configFile` | yes¹ | standard | Per-activity runtime config. |
+| `docsDir` | yes¹ | standard | Per-activity docs dir. |
 | `stages` | no | standard | Decorative phase labels. |
 | `pipeline` | yes | standard | Ordered system function names. A system may `export GATE_FIELDS = [...]` (the `<component>.<field>` dot-paths its gate reads); the union across the pipeline is the activity's field-index (see ARCHITECTURE #14). |
 | `agents` | yes | standard | Agents to import (incl. the microagent subset). `{name, path}` or bare string. |
@@ -156,9 +208,8 @@ themeColor:  '#6366f1'
 | `themeColor` | no | standard (extension-friendly) | Accent color for an optional UI. |
 | *(others)* | — | **extension** | Implementation-specific keys (e.g. a mascot). See §8. |
 
----
-
-## 4 — The registry: `Activities`
+> ¹ Required in the **legacy central** layout; **optional in the activity-first**
+> layout (§2a), where they default to `<activity>/{schema.yaml,db,config.yaml,docs}`.
 
 `Activities` is a static class with a registry built once at startup.
 

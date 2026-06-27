@@ -12,7 +12,7 @@
 #
 # Violations are FATAL (process.exit 1, not a throw) and print the schema file
 # path so any reader — human or agent — knows exactly where to fix the allowlist.
-import { readFileSync, readdirSync } from 'fs'
+import { readFileSync, readdirSync, existsSync } from 'fs'
 import { resolve } from 'path'
 import { load as yamlLoad } from 'js-yaml'
 import { _G } from './globals.coffee'
@@ -21,18 +21,30 @@ _fatal = (lines) ->
   process.stderr.write l + '\n' for l in lines
   process.exit 1
 
+# Schema files, DUAL-MODE. Prefer the LEGACY central `schema/` dir; only when it
+# holds no YAML fall back to the ACTIVITY-FIRST per-activity
+# `<ROOT>/<activity>/schema.yaml`. Returns absolute paths. (Legacy-present
+# projects keep their exact one-readdir hot path; only activity-first projects
+# pay the root scan.)
+_schemaFiles = ->
+  legacy = []
+  try
+    legacy = (resolve(_G.SCHEMA_DIR, f) for f in readdirSync(_G.SCHEMA_DIR) when f.endsWith '.yaml')
+  return legacy if legacy.length > 0
+  out = []
+  try
+    for ent in readdirSync(_G.ROOT, { withFileTypes: true }) when ent.isDirectory() and not ent.name.startsWith('.')
+      p = resolve _G.ROOT, ent.name, 'schema.yaml'
+      out.push p if existsSync p
+  out
+
 export class SchemaValidator
   # Read all schema/*.yaml fresh. When a component is declared in multiple
   # files (shared component), field subjects[] allowlists are UNIONed; other
   # props are last-wins (alphabetical file order).
   @_loadAll: ->
     out = { components: {}, scalars: {} }
-    try
-      files = readdirSync _G.SCHEMA_DIR
-    catch
-      return out
-    for file in files when file.endsWith '.yaml'
-      path = resolve _G.SCHEMA_DIR, file
+    for path in _schemaFiles()
       try
         data = yamlLoad readFileSync(path, 'utf8')
       catch

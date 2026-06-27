@@ -21,12 +21,30 @@ conventions here are enforced two ways: structurally by the `SchemaValidator` +
 ECS mapping: **E**ntities are dumb data, **C**omponents are data namespaces,
 **S**ystems are the behavior, the loop is the frame tick.
 
+## Package surface (two tiers)
+
+The framework exposes two import surfaces so a thin client (e.g. a UI) can read
+and write entities without pulling in the orchestration machinery:
+
+| Import | Tier | What it provides | Who imports it |
+|---|---|---|---|
+| `pipeline/data` | **DATA / ORM** | `_G`, `Entity` (per-id IO), `World`, `Activities`, `SchemaValidator`, `Component`, `defineComponent`, `normalizeStrings` | a thin client (UI) — reads/writes entities, knows nothing about stages |
+| `pipeline` | **DATA + ECS** | the DATA tier **plus** `Gate` / `gateTrace` / `loadConfig` / `runPipeline` (the loop + selection + gate machinery) | the agent / loop driver |
+
+A UI imports only `pipeline/data`, so it cannot accidentally reach into the loop
+or the field-index; the agent imports `pipeline`. Both resolve to the same
+singleton `Entity` / `World` / `Activities`, so they share one on-disk source of
+truth.
+
 > **Multi-activity.** A project hosts one or many **activities** (independent
-> pipelines / entity kinds) declared in `activities/*.yaml` — see `ACTIVITY.md`.
-> Every `Entity` / `World` / component accessor takes the **`activityId` first**
-> so the layers stay activity-scoped. A single-activity project needs no
-> `activities/` dir: the framework synthesizes one `default` activity over flat
-> `db/`, so the scoping is invisible.
+> pipelines / entity kinds) — see `ACTIVITY.md`. Manifests are discovered in
+> either of two **dual-mode** layouts: the legacy central layout
+> (`activities/*.yaml` + `systems/<id>/` + `db/entities/<id>/`) or the
+> activity-first layout (`<id>/activity.yaml` with everything grouped under
+> `<id>/`). Every `Entity` / `World` / component accessor takes the
+> **`activityId` first** so the layers stay activity-scoped. A single-activity
+> project needs neither: the framework synthesizes one `default` activity over
+> flat `db/`, so the scoping is invisible.
 
 ## The non-negotiable invariants
 
@@ -178,4 +196,3 @@ the runtime and `pipeline check` can resolve it.
 See `SCHEMA.md` for the runtime persistence/component API, and the agent
 conventions in `node_modules/agl-ai/docs/MICROAGENT.md` (the single authoritative
 copy, shipped by the `agl-ai` dependency).
-for the microagent conventions.
