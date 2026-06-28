@@ -69,11 +69,28 @@ export function acquireLock(label, { bypass = false } = {}) {
   return release
 }
 
-// Keep the CLI parent alive on Ctrl+C/term so the spawned child (agent.coffee)
-// can shut down gracefully; the lock is released when the child exits and the
-// parent calls process.exit (→ the 'exit' handler above). `child` is forwarded a
-// SIGTERM so an external `kill` of the parent still tears the child down.
+// Keep the CLI parent alive on Ctrl+C so the spawned child (agent.coffee) can
+// run its OWN graceful shutdown — but be the idle SAFETY NET that force-kills a
+// WEDGED child instead of needing `kill -9`.
+//
+// The child shares this process group (spawn without `detached`), so the tty
+// delivers SIGINT to the child DIRECTLY on every Ctrl-C; the child's own handler
+// does 1st press → graceful drain, 2nd press → force-exit. We therefore do NOT
+// forward SIGINT (that would double-count and skip the child's graceful drain).
+// The parent's loop is idle (it only waits on the child), so ITS signal handler
+// always runs even when the child's event loop is saturated — so on the 3rd
+// press we SIGKILL the child and exit, guaranteeing teardown. The lock is freed
+// by the parent's process 'exit' handler in acquireLock.
 export function forwardSignals(child) {
-  process.on('SIGINT', () => {})                       // let the child own graceful shutdown
+  let ints = 0
+  process.on('SIGINT', () => {
+    ints += 1
+    if (ints === 1) process.stderr.write('\nShutting down — child is draining in-flight work. Press Ctrl-C twice more to force-kill.\n')
+    if (ints >= 3) {
+      process.stderr.write('Force quit (SIGKILL).\n')
+      try { child.kill('SIGKILL') } catch {}
+      process.exit(1)
+    }
+  })
   process.on('SIGTERM', () => { try { child.kill('SIGTERM') } catch {} })
 }
