@@ -126,17 +126,33 @@ _G.Entity = class Entity
   @_watch: (activityId, dir) ->
     return if _watchers[activityId]
     W = -> _G.World.for activityId
+    # Skip a reload when the on-disk fingerprint already matches what's resident —
+    # i.e. THIS is our OWN write (the writer updated World's `_fp` in _atomicWrite)
+    # or the file is already current. This kills the self-write re-parse storm:
+    # under the worker-pool model every component write fired a chokidar `change`
+    # that re-parsed the whole (multi-MB) body, saturating the event loop. A
+    # GENUINE external edit changes mtime/size → fingerprint differs → reload as
+    # normal (so concurrent external editors are still picked up — the cheap `stat`
+    # is the guard, not a parse).
+    isOurOwnWrite = (id, p) =>
+      resident = W().get String(id)
+      return false unless resident?._fp?
+      try (_fpFromStat await stat p) is resident._fp
+      catch then false
     watcher = chokidar.watch dir,
       ignoreInitial: true
       depth: 0
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 }
     watcher.on 'change', (p) =>
       return unless p.endsWith '.yaml'
-      await @_loadFromDisk activityId, basename(p, '.yaml'), p
+      id = basename p, '.yaml'
+      return if await isOurOwnWrite id, p
+      await @_loadFromDisk activityId, id, p
     watcher.on 'add', (p) =>
       return unless p.endsWith '.yaml'
       id = basename p, '.yaml'
       W().untombstone id
+      return if await isOurOwnWrite id, p
       await @_loadFromDisk activityId, id, p
     watcher.on 'unlink', (p) =>
       return unless p.endsWith '.yaml'
