@@ -9,8 +9,14 @@ import { spawn } from 'child_process'
 import { resolve, dirname } from 'path'
 import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
+import { acquireLock, forwardSignals, wantsBypass, stripLockFlags } from './lock.mjs'
 
 export default async function run(args) {
+  // Single-process lock for this directory (shared with `pipeline walk`).
+  const bypass = wantsBypass(args)
+  acquireLock('run', { bypass })
+  args = stripLockFlags(args)
+
   const projectEntry = resolve(process.cwd(), 'agent.coffee')
   let entry
   if (existsSync(projectEntry)) {
@@ -23,6 +29,7 @@ export default async function run(args) {
   }
   // cwd stays the project so its bunfig preload (coffeescript) + _G.ROOT resolve.
   const child = spawn('bun', [entry, ...args], { stdio: 'inherit', cwd: process.cwd() })
+  forwardSignals(child)
   child.on('exit', (code) => process.exit(code ?? 0))
   child.on('error', (err) => { console.error(String(err)); process.exit(1) })
 }

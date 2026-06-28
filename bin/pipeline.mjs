@@ -32,11 +32,13 @@ const HELP = `pipeline — agent-pipeline framework CLI
   pipeline review [--pr <url>] [args...]   run LLM code-review rules
   pipeline docs                            regenerate at-a-glance reference tables
   pipeline run [args...]                   run the agent loop (bun agent.coffee)
+                                           (cwd-locked via .pipeline.lock; --force to override)
   pipeline walk [selectors...]             walk a selection of entities through a
                                            selection of stages (dev/debug harness)
       --entity <id> | --entities <list|a..b|n..m>
       --stage <name> | --stages <list|a..b>
       --activity <glob>  --limit <n>  --verbose  --no-progress  --json
+      --force / --no-lock   bypass the cwd lock (e.g. walk WHILE the loop runs)
   pipeline status                          per-stage entity snapshot
   pipeline help
 `

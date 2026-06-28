@@ -51,12 +51,12 @@ await Entity.init('default')
 const id = Entity.generateId('seed-1')
 ok(/^[0-9a-f]{7}$/.test(id), '7-char hex id')
 let e = await Entity.load('default', id)
-e = await Entity.transition('default', e, 'captured')
+e = await Entity.transition('default', id, 'captured')
 const W = _G.World.for('default')
 eq(W.get(id).workflow.stage ?? W.get(id).workflow._stage, 'captured', 'transition set stage')
-e = await Entity.patch('default', e, 'note', { text: 'hi' })
+e = await Entity.patch('default', id, 'note', { text: 'hi' })
 eq(W.get(id).note.text, 'hi', 'patch wrote component')
-e = await Entity.merge('default', e, 'note', { seen_at: 't0' })
+e = await Entity.merge('default', id, 'note', { seen_at: 't0' })
 eq(W.get(id).note.text, 'hi', 'merge preserved sibling field')
 eq(W.get(id).note.seen_at, 't0', 'merge added field')
 
@@ -65,7 +65,7 @@ const found = W.Entity__find((x) => x.workflow?._stage === 'captured')
 eq(found.length, 1, 'Entity__find selects by stage')
 
 // drop() rewinds
-e = await Entity.drop('default', e, ['note'])
+e = await Entity.drop('default', id, ['note'])
 eq(W.get(id).note, undefined, 'drop removed component')
 
 console.log('SchemaValidator')
@@ -99,7 +99,7 @@ ok(trace.some((g) => g.passed === false), 'trace captures a failed gate (why-stu
 console.log('Entity.query')
 // Three entities at different stages; query should match by predicate and cap.
 const ids = ['q1', 'q2', 'q3'].map((s) => Entity.generateId(s))
-for (const qid of ids) { let q = await Entity.load('default', qid); await Entity.transition('default', q, 'captured') }
+for (const qid of ids) { await Entity.transition('default', qid, 'captured') }
 let matched = await Entity.query('default', (e) => { return e.workflow?._stage === 'captured' ? undefined : false })
 ok(matched.length >= 3, 'query matches captured entities (undefined return = match)')
 ok(matched.every((m) => typeof m === 'object' && m.id), 'query returns full entity objects (D2)')
@@ -140,8 +140,8 @@ _G.useFieldIndex = true
 // (note.seen_at) + a heavy non-indexed component (revisions).
 const fx = Entity.generateId('fx-1')
 let fe = await Entity.load('default', fx)
-fe = await Entity.patch('default', fe, 'note', { text: 'keep', seen_at: 'NON_INDEXED' })
-fe = await Entity.merge('default', fe, 'revisions', {})  // ensure a component exists
+fe = await Entity.patch('default', fx, 'note', { text: 'keep', seen_at: 'NON_INDEXED' })
+fe = await Entity.merge('default', fx, 'revisions', {})  // ensure a component exists
 // Re-read from disk into a projection (simulate init/reload in index mode).
 await Entity._loadFromDisk('default', fx, W.get(fx)._path)
 const proj = W.get(fx)

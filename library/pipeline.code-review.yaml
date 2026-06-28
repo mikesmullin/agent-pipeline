@@ -172,3 +172,44 @@
     allowlist of caller identities (`system:` / `agent:` / `route:` prefixes).
     Return pass=false if any field or scalar is missing a non-empty `subjects:`
     list, and name the offending field(s) in the rationale. Otherwise pass=true.
+
+# ── Persistence goes through the CAS transaction API (lost-update guard) ───────
+# Every entity write must use optimistic concurrency control. A raw whole-file
+# `Entity.save` (or a load → assign → save cycle) is the exact lost-update bug
+# this API replaces: two concurrent read-modify-writes clobber each other and a
+# fully-processed entity gets rewound to an earlier stage.
+- id: pipeline-persistence-via-transaction
+  description: Entity writes go through the CAS transaction API (Entity.mutate, or Entity.begin/commit) — never a raw Entity.save or load→assign→save.
+  matches:
+    - "**/systems/**/*.coffee"
+    - "**/components/**/*.coffee"
+  exclude:
+    - "**/node_modules/**"
+  prompt: |
+    Use the read_file tool to read node_modules/pipeline/src/entity.coffee
+    (the "Optimistic transactions" section) if present.
+
+    The framework persists entities with OPTIMISTIC CONCURRENCY CONTROL to prevent
+    LOST UPDATES — two concurrent read-modify-write cycles on the same entity
+    clobbering each other, which silently rewinds a finished entity to an earlier
+    stage. Every WRITE must therefore go through the compare-and-swap (CAS)
+    transaction API:
+      - `Entity.mutate activityId, id, (entity) -> …`  — the convenience wrapper
+        (begin → edit → commit, auto-retry on conflict); the right default for a
+        component-model setter, OR
+      - an explicit `Entity.begin activityId, entity` … edit … `Entity.commit
+        activityId, entity` pair — when the caller must order an EXTERNAL effect
+        (an HTTP write, a browser render) around the commit.
+
+    Return pass=FALSE when the file PERSISTS an entity by any other means, i.e.:
+      - it calls `Entity.save` / `_G.Entity.save` directly (the non-CAS whole-file
+        overwrite this API replaces), or
+      - it performs a load → mutate → save sequence (`Entity.load` / `World.get`,
+        then assign onto the loaded object, then `Entity.save`) WITHOUT a
+        begin/commit fingerprint check.
+
+    Pure READ accessors (load/get a field and return it, with NO save) are CORRECT
+    and MUST pass. `Entity.create` (CAS-guarded, no-op when the file already
+    exists) is allowed. The framework's own `src/entity.coffee` internals are
+    exempt — this rule targets project systems and component models. When you fail
+    it, quote the exact offending `Entity.save` (or load+save) line(s).

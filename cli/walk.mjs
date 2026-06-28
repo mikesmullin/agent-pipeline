@@ -16,10 +16,12 @@
 //   --entity <id> | --entities <list|a..b|n..m>
 //   --stage <name> | --stages <list|a..b>
 //   --activity <glob>   --limit <n>   --verbose   --no-progress   --json
+//   --force / --no-lock   bypass the cwd lock (e.g. walk WHILE the loop runs)
 
 import { spawn } from 'child_process'
 import { resolve } from 'path'
 import { existsSync } from 'fs'
+import { acquireLock, forwardSignals, wantsBypass, stripLockFlags } from './lock.mjs'
 
 const WALK_FLAGS = ['--entity', '--entities', '--stage', '--stages', '--once']
 
@@ -30,10 +32,17 @@ export default async function walk(args) {
     console.error('cd into your pipeline project (or `pipeline new <name>` to scaffold one).')
     process.exit(1)
   }
+  // Single-process lock for this directory (shared with `pipeline run`). A walk
+  // intentionally run alongside the loop can bypass it with --force / --no-lock.
+  const bypass = wantsBypass(args)
+  acquireLock('walk', { bypass })
+  args = stripLockFlags(args)
+
   // Ensure walk mode even with no selectors: a bare `pipeline walk` means
   // "all entities × all stages, once" — which `--once` triggers in agent.coffee.
   const passthrough = WALK_FLAGS.some((f) => args.includes(f)) ? args : ['--once', ...args]
   const child = spawn('bun', ['agent.coffee', ...passthrough], { stdio: 'inherit', cwd: process.cwd() })
+  forwardSignals(child)
   child.on('exit', (code) => process.exit(code ?? 0))
   child.on('error', (err) => { console.error(String(err)); process.exit(1) })
 }

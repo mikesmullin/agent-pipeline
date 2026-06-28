@@ -291,7 +291,7 @@ export default async function neu(args) {
   await file(root, 'bunfig.toml', 'preload = ["bun-coffeescript/register"]\n')
 
   // db/ lives PER ACTIVITY (<id>/db/); ignore them all.
-  await file(root, '.gitignore', 'node_modules/\n*/db/\n*.log\ndebug.log\nagent.pid\n.code-review/\n.DS_Store\n')
+  await file(root, '.gitignore', 'node_modules/\n*/db/\n*.log\ndebug.log\nagent.pid\n.pipeline.lock\n.code-review/\n.DS_Store\n')
 
   await file(root, 'agent.coffee', `# ${project} — agent entry point.
 # The loop body is nothing but runPipeline(): it discovers every <id>/activity.yaml,

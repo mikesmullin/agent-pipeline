@@ -14,7 +14,7 @@
 # then the entity (or id); there is no per-entity object graph threaded through
 # the loop. `Entity.query` owns the entity lifecycle (scan → hand full entities
 # to the system fn → GC at fn exit), so systems carry no load/evict bookkeeping.
-import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises'
+import { readFile, writeFile, mkdir, readdir, stat, rename } from 'fs/promises'
 import { resolve, basename } from 'path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { createHash } from 'crypto'
@@ -23,11 +23,37 @@ import { _G } from './globals.coffee'
 import './world.coffee'
 import { Activities } from './activities.coffee'
 import { normalizeStrings } from './normalize.coffee'
+import { pMap } from './pmap.coffee'
 
 # Resolve an activity's entity dir + a single entity's file path. Single-activity
 # projects use the synthesized 'default' activity (entityDir = _G.DB_DIR).
 _dirOf  = (activityId) -> Activities.entityDir activityId
 _fileOf = (activityId, id) -> resolve _dirOf(activityId), "#{id}.yaml"
+
+# ── Optimistic-concurrency (CAS) primitives ──────────────────────────────────
+# A cheap per-file fingerprint (mtimeMs + size) captured on every read and checked
+# on every write. `NEW` = sentinel for "the file does not exist yet".
+_NEW = 'NEW'
+_fpFromStat = (st) -> "#{st.mtimeMs}:#{st.size}"
+_currentFp = (filePath) ->
+  try _fpFromStat await stat filePath
+  catch then _NEW
+_MAX_CAS_RETRIES = 5
+_sleep = (ms) -> new Promise (r) -> setTimeout r, ms
+
+# Framework bookkeeping keys that never persist to disk.
+_BOOKKEEPING = ['_mtime', '_fp', '_path', '_txn', '_full', '_projected', '_exists']
+# Plain top-level data fields of an entity (drops bookkeeping). Shallow.
+_dataOnly = (entity) ->
+  out = {}
+  out[k] = v for own k, v of (entity ? {}) when k not in _BOOKKEEPING
+  out
+# Replace `target`'s own keys IN PLACE with `source`'s, so a caller's entity
+# reference stays valid across begin()/rollback().
+_resetTo = (target, source) ->
+  delete target[k] for own k of target
+  Object.assign target, (source ? {})
+  target
 
 # One chokidar watcher per activity dir.
 _watchers = {}   # activityId → FSWatcher
@@ -60,6 +86,7 @@ _indexFieldsFor = (activityId) ->
 _project = (entity, indexFields) ->
   out = { id: String entity.id }
   out._mtime  = entity._mtime if entity._mtime?
+  out._fp     = entity._fp    if entity._fp?
   out._path   = entity._path  if entity._path?
   # Preserve existence semantics (Entity.exists = has >=1 revision) without
   # carrying the heavy revisions[] array into the projection.
@@ -120,9 +147,10 @@ _G.Entity = class Entity
 
   @_loadFromDisk: (activityId, id, filePath, { full } = {}) ->
     try
-      { mtimeMs } = await stat filePath
+      st = await stat filePath
       entity = yamlLoad(await readFile filePath, 'utf8') ? { id }
-      entity._mtime = mtimeMs
+      entity._mtime = st.mtimeMs
+      entity._fp    = _fpFromStat st
       entity._path  = filePath
     catch
       entity = { id: String(id) }
@@ -172,28 +200,111 @@ _G.Entity = class Entity
     for e in _G.World.for(activityId).all()
       await @_loadFromDisk activityId, e.id, (e._path ? _fileOf(activityId, e.id))
 
-  # Persist the whole entity to <entityDir>/<id>.yaml (never moves). Strips
-  # internal bookkeeping (_mtime/_path) and normalizes strings to LF so
-  # multi-line fields dump as readable YAML block scalars.
+  # Persist the whole entity to <entityDir>/<id>.yaml (never moves). NON-CAS:
+  # callers that need conflict detection go through @commit. Delegates to the
+  # atomic writer so a crash can never leave a truncated YAML.
   @save: (activityId, entity) ->
     W = _G.World.for activityId
     if W.isTombstoned entity.id
       W.remove entity.id
       return entity
-    { _mtime, _path, _full, _projected, _exists, toWrite... } = entity
+    await @_atomicWrite activityId, entity
+
+  # Serialize + write the entity atomically (temp file + `rename` in the same dir).
+  # Strips internal bookkeeping, normalizes strings to LF, restamps _mtime/_fp,
+  # and refreshes the World cache. No fingerprint check — @commit does the CAS.
+  @_atomicWrite: (activityId, entity) ->
+    { _mtime, _fp, _path, _txn, _full, _projected, _exists, toWrite... } = entity
     normalized = normalizeStrings toWrite
     filePath = _fileOf activityId, entity.id
     await mkdir _dirOf(activityId), { recursive: true }
-    await writeFile filePath, yamlDump(normalized, { indent: 2, lineWidth: -1, noRefs: true }), 'utf8'
-    # The saved object is a FULL body (writes always operate on full bodies);
-    # mark it so evictHydrated re-projects it at the stage boundary.
+    tmp = "#{filePath}.tmp.#{process.pid}.#{Math.random().toString(36).slice 2, 8}"
+    await writeFile tmp, yamlDump(normalized, { indent: 2, lineWidth: -1, noRefs: true }), 'utf8'
+    await rename tmp, filePath
     try
-      { mtimeMs } = await stat filePath
-      saved = { ...normalized, _mtime: mtimeMs, _path: filePath, _full: true }
+      st = await stat filePath
+      saved = { ...normalized, _mtime: st.mtimeMs, _fp: _fpFromStat(st), _path: filePath, _full: true }
     catch
       saved = { ...normalized, _path: filePath, _full: true }
-    W.set saved
+    _G.World.for(activityId).set saved
     saved
+
+  # ── Optimistic transactions (Golang style: entity is the first data arg) ─────
+  # BEGIN — snapshot `entity` fresh from disk, capture its fingerprint + a shallow
+  # base (for rollback), and mark it in-txn. Mutates `entity` IN PLACE to the
+  # fresh body and returns it. A missing file → fingerprint NEW (so a create is
+  # just a txn that commits a body where none existed).
+  @begin: (activityId, entity) ->
+    fresh = await @loadFull activityId, entity.id
+    snap  = _dataOnly fresh
+    fp    = fresh._fp ? _NEW
+    _resetTo entity, snap
+    entity._fp  = fp
+    entity._txn = { fp, base: { ...snap }, open: true, dirty: new Set() }
+    entity
+
+  # COMMIT — CAS write. If the on-disk fingerprint still equals the begin()
+  # snapshot, write atomically and close the txn → { ok:true }. If it changed
+  # underneath us, write NOTHING → { ok:false, conflict:true }. Never auto-retries
+  # (the @mutate wrapper does). A tombstoned id commits to a removal.
+  @commit: (activityId, entity) ->
+    txn = entity._txn
+    throw new Error "Entity.commit('#{entity.id}') without an open begin()" unless txn?.open
+    W = _G.World.for activityId
+    if W.isTombstoned entity.id
+      W.remove entity.id
+      entity._txn = null
+      return { ok: true, tombstoned: true }
+    current = await _currentFp _fileOf(activityId, entity.id)
+    unless current is txn.fp
+      return { ok: false, conflict: true, expected: txn.fp, actual: current }
+    saved = await @_atomicWrite activityId, entity
+    entity._fp  = saved._fp
+    entity._txn = null
+    { ok: true }
+
+  # ROLLBACK — discard in-memory edits back to the begin() snapshot; close the txn.
+  @rollback: (activityId, entity) ->
+    base = entity._txn?.base
+    _resetTo entity, base if base?
+    entity._txn = null
+    entity
+
+  # MUTATE — the convenience wrapper: begin → fn(entity) → commit, auto-retrying
+  # on a CAS conflict (bounded, jittered). `id`-first. Returns the committed
+  # entity; throws on exhausted retries (no data written → nothing corrupted).
+  @mutate: (activityId, id, fn) ->
+    for attempt in [1.._MAX_CAS_RETRIES]
+      entity = { id: String id }
+      await @begin activityId, entity
+      await fn entity
+      res = await @commit activityId, entity
+      return entity if res.ok
+      await _sleep (10 + Math.floor(Math.random() * 40))
+    throw new Error "Entity.mutate('#{id}'): write conflict after #{_MAX_CAS_RETRIES} retries"
+
+  # Optional dirty-tracking helpers (entity-first). They record touched dot-paths
+  # on the open txn so a FUTURE field-level merge-on-conflict is possible; today
+  # @commit still writes the whole body, so direct `entity.x = …` is equivalent.
+  @setField: (activityId, entity, dotPath, value) ->
+    parts = dotPath.split '.'
+    obj = entity
+    for part, i in parts
+      if i is parts.length - 1
+        obj[part] = value
+      else
+        obj[part] = obj[part] ? {}
+        obj = obj[part]
+    entity._txn?.dirty?.add dotPath
+    entity
+
+  @mergeComponent: (activityId, entity, component, partial) ->
+    entity[component] = { ...(entity[component] or {}), ...partial }
+    entity._txn?.dirty?.add "#{component}.#{k}" for k of partial
+    entity
+
+  @dirtyPaths: (entity) -> [...(entity._txn?.dirty ? new Set())]
+
 
   # Evict one entity's body from the World cache to free memory. Streaming batch
   # runners use this to process the corpus one entity at a time instead of
@@ -217,94 +328,83 @@ _G.Entity = class Entity
     _G._hydratedThisStage?[activityId] = []
     undefined
 
-  # ── Mutation API (the entity object is the second arg) ─────────────────────
+  # ── Mutation API (id-first, CAS-safe via @mutate) ──────────────────────────
 
   # Replace one top-level component (key) on the entity.
-  @patch: (activityId, entity, componentName, data) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    await @save activityId, { ...fresh, [componentName]: data }
+  @patch: (activityId, id, componentName, data) ->
+    await @mutate activityId, id, (e) -> e[componentName] = data
 
   # Shallow-merge a partial update into an existing component.
-  @merge: (activityId, entity, componentName, partial) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    existing = fresh[componentName] or {}
-    await @save activityId, { ...fresh, [componentName]: { ...existing, ...partial } }
+  @merge: (activityId, id, componentName, partial) ->
+    await @mutate activityId, id, (e) ->
+      e[componentName] = { ...(e[componentName] or {}), ...partial }
 
   # Append an item to an array component.
-  @append: (activityId, entity, componentName, item) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    arr = fresh[componentName] or []
-    await @save activityId, { ...fresh, [componentName]: [...arr, item] }
+  @append: (activityId, id, componentName, item) ->
+    await @mutate activityId, id, (e) ->
+      e[componentName] = [...(e[componentName] or []), item]
 
   # Set a nested value by dot path, e.g. 'workflow._stage'.
-  @setPath: (activityId, entity, dotPath, value) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    parts = dotPath.split '.'
-    updated = { ...fresh }
-    obj = updated
-    for part, i in parts
-      if i is parts.length - 1
-        obj[part] = value
-      else
-        obj[part] = { ...(obj[part] or {}) }
-        obj = obj[part]
-    await @save activityId, updated
+  @setPath: (activityId, id, dotPath, value) ->
+    await @mutate activityId, id, (e) ->
+      parts = dotPath.split '.'
+      obj = e
+      for part, i in parts
+        if i is parts.length - 1
+          obj[part] = value
+        else
+          obj[part] = obj[part] ? {}
+          obj = obj[part]
 
   # Remove a set of top-level component keys (or dot-paths). The re-queue /
   # stage-rewind mechanism: strip a stage's outputs and the archetype-presence
   # query re-picks the entity up at the earliest missing stage on the next tick.
-  @drop: (activityId, entity, keys) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    updated = { ...fresh }
-    for key in keys
-      if key.includes '.'
-        parts = key.split '.'
-        obj = updated
-        for part, i in parts
-          if i is parts.length - 1
-            delete obj[part] if obj?
-          else
-            obj[part] = { ...(obj?[part] or {}) }
-            obj = obj[part]
-      else
-        delete updated[key]
-    await @save activityId, updated
+  @drop: (activityId, id, keys) ->
+    await @mutate activityId, id, (e) ->
+      for key in keys
+        if key.includes '.'
+          parts = key.split '.'
+          obj = e
+          for part, i in parts
+            if i is parts.length - 1
+              delete obj[part] if obj?
+            else
+              obj = obj?[part]
+              break unless obj?
+        else
+          delete e[key]
 
   # Transition to a new stage (updates workflow._stage/_status/_updated_at).
-  @transition: (activityId, entity, newStage, extra = {}) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    fromStage = fresh.workflow?._stage or 'none'
-    now = new Date().toISOString()
-    saved = await @save activityId, {
-      ...fresh
-      workflow: {
-        ...(fresh.workflow or {})
+  @transition: (activityId, id, newStage, extra = {}) ->
+    fromStage = null
+    saved = await @mutate activityId, id, (e) ->
+      fromStage = e.workflow?._stage or 'none'
+      e.workflow = {
+        ...(e.workflow or {})
         _stage: newStage
         _status: extra._status or 'in_progress'
-        _updated_at: now
+        _updated_at: new Date().toISOString()
         ...extra
       }
-    }
-    _G.currentEntityId = entity.id
+    _G.currentEntityId = String id
     _G.log "transition  #{fromStage} → #{newStage}"
     saved
 
   # Record an error and increment the retry counter (drives backoff).
-  @recordError: (activityId, entity, err) ->
-    fresh = _G.World.for(activityId).get(entity.id) ? entity
-    now = new Date().toISOString()
-    retryCount = (fresh.workflow?._retry_count or 0) + 1
-    _G.log 'entity.error', { id: entity.id, error: String(err?.message or err), retryCount }
-    await @save activityId, {
-      ...fresh
-      workflow: {
-        ...(fresh.workflow or {})
+  @recordError: (activityId, id, err) ->
+    retryCount = 0
+    await @mutate activityId, id, (e) ->
+      now = new Date().toISOString()
+      retryCount = (e.workflow?._retry_count or 0) + 1
+      e.workflow = {
+        ...(e.workflow or {})
         _last_error_at: now
         _retry_count: retryCount
         _last_error_message: String(err?.message or err)
         _updated_at: now
       }
-    }
+    _G.log 'entity.error', { id: String(id), error: String(err?.message or err), retryCount }
+
 
   # True while the entity is inside its post-error backoff window.
   @inBackoff: (entity) ->
@@ -384,9 +484,20 @@ _G.Entity = class Entity
   @snapshotAll: (activityId)     -> _G.World.for(activityId).all()
   @count:       (activityId)     -> _G.World.for(activityId).count()
 
-  # Create a new entity with just an id; writes an empty stub to disk.
+  # Create a new entity with just an id. CAS-guarded: a NO-OP when a file already
+  # exists on disk (returns the existing full body) so a re-`create` can NEVER
+  # clobber a fully-processed entity back to an empty stub — the lost-update
+  # rewind we are guarding against. Only writes the stub when the file is absent.
   @create: (activityId, id) ->
-    await @save activityId, { id: String id }
+    p = _fileOf activityId, id
+    current = await _currentFp p
+    return await @loadFull activityId, id unless current is _NEW   # already exists → no-op
+    entity = { id: String id }
+    await @begin activityId, entity                                # fp = NEW (no file yet)
+    res = await @commit activityId, entity
+    return entity if res.ok
+    # Lost the create race (peer created it first) → return the peer's body.
+    await @loadFull activityId, id
 
   # Git-style short id: 7-char truncated SHA1. Pass a seed for deterministic ids.
   @generateId: (seed = "#{Date.now()}-#{Math.random()}") ->
