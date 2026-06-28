@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Pipeline — Documentation</title>
+<meta name="description" content="Agent Pipeline — a framework for building agents that run as a loop, not a script. ECS pattern, disk-authoritative state, microagents, and guardrails.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- mobile topbar -->
+<div class="topbar">
+  <span class="brand">🔁 Agent Pipeline</span>
+  <button id="navToggle">☰ Menu</button>
+</div>
+
+<div class="layout">
+
+  <!-- ============================ SIDEBAR ============================ -->
+  <aside class="sidebar" id="sidebar">
+    <a class="logo-mini" href="#top">
+      <span class="pipe"></span>
+      <b>AG3NT <span>Pipeline</span></b>
+    </a>
+
+    <div class="nav-group">
+      <div class="nav-title">Start here</div>
+      <a class="nav-link" href="#top">Overview</a>
+      <a class="nav-link" href="#why">Why a loop, not a script</a>
+      <a class="nav-link" href="#quickstart">Quick start</a>
+      <a class="nav-link" href="#first-pipeline">Build your first pipeline</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-title">Core concepts</div>
+      <a class="nav-link" href="#loop">The game-engine loop</a>
+      <a class="nav-link" href="#ecs">ECS &amp; the five primitives</a>
+      <a class="nav-link" href="#entity">Entities</a>
+      <a class="nav-link" href="#component">Components &amp; the ACL</a>
+      <a class="nav-link" href="#system">Systems</a>
+      <a class="nav-link" href="#microagent">Microagents</a>
+      <a class="nav-link" href="#gate">Gate logic</a>
+      <a class="nav-link" href="#activities">Activities</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-title">Programming model</div>
+      <a class="nav-link" href="#api-entity">Entity API</a>
+      <a class="nav-link" href="#api-world">World &amp; query</a>
+      <a class="nav-link" href="#api-component">defineComponent</a>
+      <a class="nav-link" href="#api-validator">SchemaValidator</a>
+      <a class="nav-link" href="#api-config">Config knobs</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-title">Guardrails</div>
+      <a class="nav-link" href="#subjects">Subject identity</a>
+      <a class="nav-link" href="#check">pipeline check</a>
+      <a class="nav-link" href="#review">pipeline review</a>
+      <a class="nav-link" href="#gendocs">pipeline docs</a>
+      <a class="nav-link" href="#cli">CLI reference</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-title">Advanced &amp; contributing</div>
+      <a class="nav-link" href="#invariants">The 14 invariants</a>
+      <a class="nav-link" href="#field-index">Field-index (scale)</a>
+      <a class="nav-link" href="#cas">CAS &amp; lost-update</a>
+      <a class="nav-link" href="#workers">Worker-pool stages</a>
+      <a class="nav-link" href="#tiers">Two-tier package surface</a>
+      <a class="nav-link" href="#stories">War stories</a>
+      <a class="nav-link" href="#sourcemap">Source map</a>
+    </div>
+  </aside>
+
+  <!-- ============================ CONTENT ============================ -->
+  <main class="content">
+  <div class="wrap" id="top">
+
+    <!-- ----------------------------- HERO ----------------------------- -->
+    <div class="hero">
+      <div class="ribbon">Power your play!</div><br>
+      <img class="logo" src="assets/agent-pipeline-logo.png" alt="Agent Pipeline">
+      <p class="tagline">A framework for building agents that run as a&nbsp;<em>loop</em>, not a&nbsp;script.</p>
+      <p class="sub">Borrow the game-engine loop and the ECS pattern. Keep your work items on disk as plain YAML, so the loop is crash-safe, resumable, and editable in your text editor <em>while it runs</em>. Confine the model to tiny, single-decision microagents; keep everything else honest deterministic code.</p>
+      <div class="cta">
+        <a class="btn green" href="#quickstart">🚀 Quick start</a>
+        <a class="btn blue" href="#first-pipeline">🍪 Build a pipeline</a>
+        <a class="btn cream" href="#invariants">⚙️ For contributors</a>
+      </div>
+    </div>
+
+    <div class="grid cols-2" style="align-items:center; margin-top:26px;">
+      <div>
+        <p class="lead">Most "AI agent" code is a one-shot prompt chain: it runs top to bottom, and when it crashes halfway through a thousand items, you start over and hope. <strong>Agent Pipeline is the opposite.</strong></p>
+        <p>The hard part of a real pipeline isn't calling the model — it's everything around it: where state lives, which step runs next, who's allowed to write which field, and how you stop the model from quietly doing the wrong thing. This framework gives you those primitives <strong>and</strong> the guardrails, so you spend your time on business logic, not plumbing.</p>
+      </div>
+      <div style="justify-self:center;">
+        <div class="nutrition">
+          <h4>Framework Facts</h4>
+          <div class="srv">~2,560 lines of source · 5 primitives · 0 magic</div>
+          <div class="row big"><span>State</span><b>100% on disk (YAML)</b></div>
+          <div class="row"><span>Crash-safe</span><b>by construction</b></div>
+          <div class="row"><span>LLM surface</span><b>microagents only</b></div>
+          <div class="row"><span>Access control</span><b>per-field, enforced</b></div>
+          <div class="row"><span>Concurrency</span><b>per-stage worker pools</b></div>
+          <div class="row"><span>Runtime</span><b>Bun + CoffeeScript</b></div>
+          <div class="srv" style="border-bottom:none; margin-top:4px;">% Daily Value of plumbing you don't write: <b>100%</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================== WHY ============================== -->
+    <section id="why">
+      <h2><span class="pipe-bullet"></span>Why a loop, not a script <a class="anchor-link" href="#why">#</a></h2>
+      <p class="kicker">The core idea</p>
+      <p>A script processes items <em>start to finish</em>. A loop advances <em>many</em> items a little at a time, forever — exactly how a game engine renders thousands of objects: one tick advances every object one step. That single shift is what buys you crash-safety, resumability, and live editability.</p>
+
+      <div class="grid cols-2">
+        <div class="prim">
+          <h4>🛟 Crash-safe by construction</h4>
+          <p class="muted">State is YAML on disk, one file per work item. Kill the process mid-run and it resumes every item exactly where it left off — because the next tick simply re-queries what still needs doing.</p>
+        </div>
+        <div class="prim">
+          <h4>🚧 The model can't go rogue</h4>
+          <p class="muted">Every component field declares who may write it. A violation is a hard error at runtime <em>and</em> a failed build under <code>pipeline check</code>. The LLM never gets to scribble outside its lane.</p>
+        </div>
+        <div class="prim">
+          <h4>🎯 Judgment is isolated</h4>
+          <p class="muted">LLM calls live only inside one-decision <strong>microagents</strong> — one question, one typed answer. The rest of your pipeline is ordinary, testable, deterministic code.</p>
+        </div>
+        <div class="prim">
+          <h4>📐 Docs that stay true</h4>
+          <p class="muted"><code>pipeline docs</code> regenerates the stage / schema / access tables from the source, so the reference can't drift from the code. <code>pipeline check</code> is the static linter that keeps the contract honest.</p>
+        </div>
+      </div>
+
+      <div class="callout why">
+        <p><span class="lbl">Why it matters.</span> When you migrate a thousand dashboards (the project this framework was forged on), a one-shot script is hopeless: a flaky cluster, a memory balloon, or one bad item wedges the whole run. A loop shrugs those off — the bad item stays stuck and self-explains, every other item keeps flowing, and you fix the class of problem once.</p>
+      </div>
+    </section>
+
+    <!-- =========================== QUICKSTART ========================= -->
+    <section id="quickstart">
+      <h2><span class="pipe-bullet"></span>Quick start <a class="anchor-link" href="#quickstart">#</a></h2>
+      <p class="kicker">From zero to a running loop in four commands</p>
+
+      <h3>1 · Install</h3>
+      <p>Built for <a href="https://bun.sh">Bun</a> + CoffeeScript. Link it from local disk (not on npm yet):</p>
+      <pre><button class="copy">copy</button><code><span class="c"># in the framework repo</span>
+cd pipeline
+bun install
+bun link            <span class="c"># registers the global `pipeline` command + a linkable dep</span></code></pre>
+
+      <h3>2 · Scaffold a project</h3>
+      <p><code>pipeline new</code> writes a complete, runnable, <strong>activity-first</strong> project so every concept is visible in one place. Everything is multi-activity — a single-activity project is just a one-item activity list, so the structure never changes when a second activity arrives.</p>
+      <pre><button class="copy">copy</button><code><span class="c"># one activity named `notes`, with three stages:</span>
+pipeline new my-agent --activity notes --stages ingest,classify,publish
+cd my-agent
+bun link pipeline   <span class="c"># resolve `import … from 'pipeline'` to your local framework</span>
+bun install</code></pre>
+      <p>The CLI uses <strong>ordered, repeatable scope flags</strong>: each <code>--activity &lt;id&gt;</code> opens a scope and the flags after it apply until the next <code>--activity</code>. Repeat to host several pipelines in one project:</p>
+      <pre><button class="copy">copy</button><code>pipeline new big \
+  --activity kibana --stages ingest,resolve,publish,verify,report \
+  --activity beam   --stages fetch,convert,publish</code></pre>
+
+      <h3>3 · Run it, then drop in work</h3>
+      <pre><button class="copy">copy</button><code>bun agent.coffee                          <span class="c"># start the loop (ticks every few seconds)</span>
+echo "say hello" &gt;&gt; notes/db/_drop.md     <span class="c"># hand the 'notes' activity a unit of work</span></code></pre>
+
+      <h3>4 · Debug without running the whole loop — <em>walk</em></h3>
+      <p><code>pipeline walk</code> runs a <em>selection of entities</em> through a <em>selection of stages</em>. A single entity prints its gate trace + component diff; many entities stream one at a time under a live progress meter.</p>
+      <pre><button class="copy">copy</button><code>pipeline walk --activity notes --entity &lt;id&gt; --stage classifySystem   <span class="c"># one entity, one stage</span>
+pipeline walk --activity notes --entities 0..49 --stages ingest..publish
+pipeline walk --activity notes --once                                 <span class="c"># all entities × all stages, once</span></code></pre>
+      <div class="callout tip"><p><span class="lbl">Walk is safe while the loop runs.</span> It streams one entity at a time (bounded memory) and is the fastest way to exercise gate logic + a stage on real entities. Pass <code>--force</code> / <code>--no-lock</code> to bypass the cwd lock and walk <em>while</em> the loop is draining the corpus.</p></div>
+    </section>
+
+    <!-- ======================= FIRST PIPELINE ========================= -->
+    <section id="first-pipeline">
+      <h2><span class="pipe-bullet"></span>Build your first pipeline <a class="anchor-link" href="#first-pipeline">#</a></h2>
+      <p class="kicker">The scaffold, end to end</p>
+      <p>Each activity gets its own directory holding everything it needs. One system file per stage, already chained:</p>
+      <pre><button class="copy">copy</button><code>my-agent/
+├─ agent.coffee              <span class="c"># the loop driver — one line: await runPipeline()</span>
+├─ config.yaml              <span class="c"># loop knobs (model, pipeline_width, interval)</span>
+├─ .code-review.yaml        <span class="c"># shared LLM convention rules</span>
+└─ notes/                   <span class="c"># ── one activity ──</span>
+   ├─ activity.yaml         <span class="c">#   manifest: stages + pipeline + agents</span>
+   ├─ schema.yaml           <span class="c">#   components + per-field ACL (the contract)</span>
+   ├─ config.yaml           <span class="c">#   per-activity domain config</span>
+   ├─ systems/              <span class="c">#   ingest.coffee · classify.coffee · publish.coffee</span>
+   ├─ microagents/          <span class="c">#   the one-decision LLM steps</span>
+   ├─ models/components/    <span class="c">#   one validated accessor per component</span>
+   ├─ docs/PIPELINE.md      <span class="c">#   GENERATED by `pipeline docs`</span>
+   └─ db/&lt;id&gt;.yaml          <span class="c">#   the entities (disk = source of truth)</span></code></pre>
+
+      <h3>Generate the next piece, already wired</h3>
+      <p>You never hand-write the boilerplate — generators emit it wired to the schema and conventions:</p>
+      <pre><button class="copy">copy</button><code>pipeline g system    enrich     <span class="c"># a new stage</span>
+pipeline g component triage     <span class="c"># a new typed field-bag (+ its ACL stub)</span>
+pipeline g microagent classify  <span class="c"># a one-decision LLM step</span></code></pre>
+
+      <h3>Keep it honest as you go</h3>
+      <pre><button class="copy">copy</button><code>pipeline check      <span class="c"># static schema/ACL linter — fails the build on a violation</span>
+pipeline docs       <span class="c"># regenerate the stage / schema / access reference from source</span>
+pipeline review     <span class="c"># run the bundled LLM convention rules (code-review)</span></code></pre>
+    </section>
+
+    <hr class="div">
+
+    <!-- ============================== LOOP ============================ -->
+    <section id="loop">
+      <h2><span class="pipe-bullet"></span>The game-engine loop <a class="anchor-link" href="#loop">#</a></h2>
+      <p class="kicker">One tick advances everything a little</p>
+      <p>Your <code>agent.coffee</code> is one line:</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { runPipeline } <span class="k">from</span> <span class="s">'pipeline'</span>
+<span class="k">await</span> <span class="f">runPipeline</span>()</code></pre>
+      <p><code>runPipeline()</code> discovers every <code>&lt;id&gt;/activity.yaml</code>, loads its systems, and runs each activity's pipeline forever. Nothing else lives in the loop body — that is the whole standard.</p>
+
+      <p>Under the hood the loop is <strong>dual-mode</strong>. A project with <code>activity.yaml</code> manifests runs the multi-activity loop; a bare <code>config.yaml systems:</code> scaffold is synthesized into a one-activity set and runs the <em>same</em> path. There is exactly one execution model.</p>
+
+      <div class="callout note"><p><span class="lbl">The mapping.</span> <strong>E</strong>ntities are dumb data · <strong>C</strong>omponents are data namespaces · <strong>S</strong>ystems are the behavior · the <strong>loop</strong> is the frame tick. If you've ever written a game update loop, you already know this shape.</p></div>
+    </section>
+
+    <!-- ============================== ECS ============================= -->
+    <section id="ecs">
+      <h2><span class="pipe-bullet"></span>ECS &amp; the five primitives <a class="anchor-link" href="#ecs">#</a></h2>
+      <p class="kicker">Everything is one of five things</p>
+      <p>Agent Pipeline borrows the Entity-Component-System pattern game engines use to keep thousands of objects organized, and adds one primitive for agentic work — the <strong>agent</strong>, the only place an LLM exercises judgment.</p>
+
+      <div class="grid cols-2">
+        <div class="prim"><h4>① Entity</h4><p class="tag">db/&lt;id&gt;.yaml</p><p class="muted">One unit of work in flight. Opaque except for its <code>id</code> — just an id plus whatever data has accreted onto it. <strong>Disk is the source of truth.</strong></p></div>
+        <div class="prim"><h4>② Component</h4><p class="tag">a top-level key in the YAML</p><p class="muted">A named, typed bag of fields (<code>note</code>, <code>verify</code>, …). Declared once in <code>schema.yaml</code>, which is <em>also</em> the access-control list.</p></div>
+        <div class="prim"><h4>③ System</h4><p class="tag">systems/&lt;stage&gt;.coffee</p><p class="muted">A function that advances entities through one stage. It <em>pulls</em> the entities it wants (queries the world; never handed one), does deterministic work, and saves.</p></div>
+        <div class="prim"><h4>④ Agent / Microagent</h4><p class="tag">microagents/&lt;name&gt;.coffee</p><p class="muted">The only place an LLM decides. A <strong>microagent</strong> is the focused subset: one question, one typed tool-call answer.</p></div>
+      </div>
+      <div class="prim" style="margin-top:16px;"><h4>⑤ The loop</h4><p class="tag">agent.coffee → runPipeline()</p><p class="muted">The engine tick. Framework-owned; runs each activity's systems every few seconds, with bounded per-stage concurrency.</p></div>
+
+      <div class="callout why"><p><span class="lbl">Why ECS for agents?</span> Because work items <em>accrete capability</em> exactly like game objects accrete components. An entity isn't "a dashboard at stage 4" — it's "an entity that <em>has</em> a <code>fetch</code> and a <code>dataview</code> but not yet a <code>verify</code>." Systems query by component <em>presence</em> (archetype style), so adding a stage is adding a component, not editing a state machine.</p></div>
+    </section>
+
+    <!-- ============================ ENTITY ============================ -->
+    <section id="entity">
+      <h2><span class="pipe-bullet"></span>Entities — disk is the source of truth <a class="anchor-link" href="#entity">#</a></h2>
+      <p class="kicker">Crash-safety, made of plain files</p>
+      <p>An entity is a YAML file at <code>&lt;activity&gt;/db/&lt;id&gt;.yaml</code>. It is just an <code>id</code> plus the components that have accreted onto it. The World cache is a <em>performance layer only</em> — every read goes through the model and re-reads from disk when the file's mtime changed, so an operator editing a YAML in their editor takes effect on the next tick.</p>
+      <pre><button class="copy">copy</button><code><span class="c"># db/a0f4a9.yaml — an entity mid-flight</span>
+<span class="f">id</span>: a0f4a9
+<span class="f">fetch</span>:                  <span class="c"># component ① — written by the ingest system</span>
+  <span class="f">status</span>: original
+<span class="f">dataview</span>:               <span class="c"># component ② — written by the resolve system</span>
+  <span class="f">resolved</span>: <span class="k">true</span>
+  <span class="f">k8_dataview_id</span>: <span class="s">'a786…'</span>
+<span class="c"># no `verify:` component yet → the verify stage's gate will pick this up next</span></code></pre>
+      <div class="callout tip"><p><span class="lbl">The stage lives inside the entity; files never move.</span> Two sanctioned styles: a <code>workflow._stage</code> field, or a status field plus component-presence (e.g. <code>fetch.status</code> + whether <code>dataview</code> is written). Your editor tabs stay stable as work progresses — nothing is shuffled between folders.</p></div>
+      <p>The full <a href="#api-entity">Entity API</a> is below; the headline is that you rarely touch it directly — you read and write through <em>validated component accessors</em>, and the framework owns the load/save/evict lifecycle.</p>
+    </section>
+
+    <!-- =========================== COMPONENT ========================== -->
+    <section id="component">
+      <h2><span class="pipe-bullet"></span>Components &amp; the access-control list <a class="anchor-link" href="#component">#</a></h2>
+      <p class="kicker">The schema is the contract AND the ACL</p>
+      <p>A component is declared once in <code>schema.yaml</code>. Crucially, every field lists <strong>which subjects may write it</strong> — the access-control list the framework enforces at runtime and the linter enforces statically.</p>
+      <pre><button class="copy">copy</button><code><span class="c"># schema.yaml</span>
+<span class="f">components</span>:
+  <span class="f">note</span>:
+    <span class="f">fields</span>:
+      <span class="f">text</span>:
+        <span class="f">type</span>: string
+        <span class="f">subjects</span>: [<span class="s">system:notes/ingest</span>]      <span class="c"># only ingest may write `text`</span>
+      <span class="f">label</span>:
+        <span class="f">type</span>: string
+        <span class="f">subjects</span>: [<span class="s">agent:notes/classify</span>]     <span class="c"># only the classify microagent may write `label`</span>
+      <span class="f">processed_at</span>:
+        <span class="f">type</span>: ISO string
+        <span class="f">subjects</span>: [<span class="s">system:notes/classify</span>]</code></pre>
+      <p>Build a model with one line; it generates a validated getter and setter per field:</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { defineComponent } <span class="k">from</span> <span class="s">'pipeline'</span>
+<span class="k">export</span> NoteComponent = <span class="f">defineComponent</span> <span class="s">'note'</span>, [<span class="s">'text'</span>, <span class="s">'label'</span>, <span class="s">'processed_at'</span>]
+
+<span class="c"># every accessor takes the calling SUBJECT, then activityId, then id:</span>
+text = <span class="k">await</span> NoteComponent.<span class="f">text</span> SUBJECT, activityId, id            <span class="c"># getter (camelCase field)</span>
+<span class="k">await</span> NoteComponent.<span class="f">setProcessedAt</span> SUBJECT, activityId, id, isoNow  <span class="c"># setter (set + PascalCase)</span></code></pre>
+      <div class="callout gotcha"><p><span class="lbl">A violation is fatal.</span> If a subject writes a field it isn't allowed to, the <code>SchemaValidator</code> exits the process (exit&nbsp;1) at runtime, and <code>pipeline check</code> fails the build before you ever run. This is the single mechanism that stops the model — or a careless refactor — from scribbling outside its lane.</p></div>
+      <p>For compound / multi-field writes or array components, hand-roll a <code>Component</code> subclass and call <code>@check(subject, field)</code> per field; declare the method → fields mapping in <code>schema-aliases.yaml</code> so the linter can trace it.</p>
+    </section>
+
+    <!-- ============================ SYSTEM ============================ -->
+    <section id="system">
+      <h2><span class="pipe-bullet"></span>Systems — pull, work, save <a class="anchor-link" href="#system">#</a></h2>
+      <p class="kicker">Behavior lives here, never in the model</p>
+      <p>A system advances entities through one stage. Its <em>first act</em> is to query the world for the entities it cares about — it is never handed one. It does deterministic work, then saves through validated accessors.</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { Entity, Gate } <span class="k">from</span> <span class="s">'pipeline'</span>
+<span class="k">import</span> { NoteComponent } <span class="k">from</span> <span class="s">'../models/components/note.coffee'</span>
+
+SYSTEM = <span class="s">'system:notes/classify'</span>
+ACTIVITY = <span class="s">'notes'</span>
+<span class="k">export</span> GATE_FIELDS = [<span class="s">'note.text'</span>, <span class="s">'note.processed_at'</span>]   <span class="c"># the fields the gate reads</span>
+
+<span class="k">export</span> classifySystem = ->
+  <span class="c"># PULL: select entities this stage should advance (the gate).</span>
+  targets = <span class="k">await</span> Entity.<span class="f">query</span> ACTIVITY, (e) -&gt;
+    <span class="k">return</span> <span class="k">false</span> <span class="k">unless</span> <span class="f">Gate</span> <span class="s">'has text, not yet classified'</span>, (
+      e.note?.text? <span class="k">and</span> <span class="k">not</span> e.note?.processed_at?)
+
+  <span class="k">for</span> entity <span class="k">in</span> targets
+    <span class="c"># … deterministic work (or call a microagent) …</span>
+    <span class="k">await</span> NoteComponent.<span class="f">setProcessedAt</span> SYSTEM, ACTIVITY, entity.id, <span class="k">new</span> Date().<span class="f">toISOString</span>()</code></pre>
+      <div class="callout why"><p><span class="lbl">Why pull, never push?</span> Because a pushed entity couples the caller to the system's selection logic, and the system can no longer be reasoned about in isolation. When every system <em>queries</em> for its own archetype, the loop can run them in any order, resume after a crash, and re-pick an entity the instant a prior stage writes its component — no orchestration glue, no state machine to keep in sync.</p></div>
+      <p>A system may also export <code>selectEligible</code> + <code>processOne</code> (the <a href="#workers">worker-pool seams</a>) so the framework can run it as a continuous per-stage worker. Most systems already have the per-entity body; the migration is mechanical.</p>
+    </section>
+
+    <!-- =========================== MICROAGENT ========================= -->
+    <section id="microagent">
+      <h2><span class="pipe-bullet"></span>Microagents — the only place the model decides <a class="anchor-link" href="#microagent">#</a></h2>
+      <p class="kicker">One question, one typed answer</p>
+      <p>A microagent answers <em>one</em> question via <em>one</em> typed tool call. I/O, shell, parsing, retries, validation, side-effects, and final string formatting stay <strong>out</strong> of the model — the calling system owns every save and transition. The convention is roughly 1:1 component↔microagent: a microagent's output is stored on a component, then fed to the next stage.</p>
+      <div class="callout tip"><p><span class="lbl">Maker ≠ Checker.</span> When you add a verification or judge stage, the generator and each critic must be <em>distinct subjects</em> (and ideally distinct models) so nothing grades its own output. The framework's verify→judge loop is built on exactly this separation.</p></div>
+      <p>The full microagent contract ships with the <code>agl-ai</code> dependency — see <code>node_modules/agl-ai/docs/MICROAGENT.md</code>. The shape is <code>Agent.factory({ model, system_prompt, output_tool })</code> → one bounded call returning a typed object.</p>
+    </section>
+
+    <!-- ============================= GATE ============================= -->
+    <section id="gate">
+      <h2><span class="pipe-bullet"></span>Gate logic — the most safety-critical code <a class="anchor-link" href="#gate">#</a></h2>
+      <p class="kicker">Which entities, and when to abort</p>
+      <p>Gate logic decides <em>which</em> entities a system selects and <em>when</em> it aborts processing one. When it's wrong, an entity silently gets "stuck" — never selected, or always skipped. To make it a first-class, debuggable construct, every piece of gate logic is wrapped in the <code>Gate</code> marker.</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { Entity, Gate } <span class="k">from</span> <span class="s">'pipeline'</span>
+
+targets = <span class="k">await</span> Entity.<span class="f">query</span> activityId, (e) -&gt;
+  <span class="k">return</span> <span class="k">false</span> <span class="k">unless</span> <span class="f">Gate</span> <span class="s">'captured'</span>,   e.workflow?._stage <span class="k">is</span> <span class="s">'captured'</span>
+  <span class="k">return</span> <span class="k">false</span> <span class="k">if</span>     <span class="f">Gate</span> <span class="s">'in backoff'</span>, Entity.<span class="f">inBackoff</span> e
+  <span class="c"># …falls through → this entity matches (a predicate matches UNLESS it returns false)</span></code></pre>
+      <p><code>Gate(cond)</code> / <code>Gate(label, cond)</code> is a <strong>pass-through</strong> — it returns the boolean it wraps, so it drops around existing logic without refactoring. Because all gate logic flows through this one marker, three things become possible:</p>
+      <ul>
+        <li><strong><code>pipeline check</code></strong> flags gate-ish lines (the query predicate and any <code>continue/break/return-false</code> guards) that are <em>not</em> wrapped in <code>Gate</code>. A deliberate exception carries a trailing <code>&#35; gate:ignore</code>.</li>
+        <li><strong><code>pipeline docs</code></strong> extracts each label + condition verbatim into a <em>Gate Logic</em> table — deterministically, no LLM.</li>
+        <li><strong>Runtime</strong> records each gate's pass/fail for the current entity; <code>gateTrace(entityId)</code> returns its recent evaluations — the "why is X stuck?" view.</li>
+      </ul>
+      <div class="callout note"><p><span class="lbl">The query cap is the framework's, not yours.</span> <code>Entity.query</code> returns up to <code>pipeline_width</code> matches and sets <code>_G.currentEntityId</code> before each predicate so <code>Gate()</code> attributes correctly. The cap is a cross-cutting default — keep it out of your gate logic.</p></div>
+    </section>
+
+    <!-- =========================== ACTIVITIES ========================= -->
+    <section id="activities">
+      <h2><span class="pipe-bullet"></span>Activities — many pipelines, one project <a class="anchor-link" href="#activities">#</a></h2>
+      <p class="kicker">The multi-pipeline abstraction</p>
+      <p>An <strong>Activity</strong> is one named pipeline. A project may host one or many; they execute independently over their own entities, schema, and entity dir. Adding an activity is <em>YAML + files, not code</em> — declare a manifest, drop in the systems/agents/schema it references, and the registry wires it up at startup.</p>
+      <pre><button class="copy">copy</button><code><span class="c"># notes/activity.yaml — the single declarative description of an activity</span>
+<span class="f">id</span>:    notes                <span class="c"># stable id used everywhere (dirs, URLs, schema lookups)</span>
+<span class="f">name</span>:  Notes
+<span class="f">stages</span>: [original, classified, published]   <span class="c"># decorative phase labels for dashboards</span>
+<span class="f">pipeline</span>:                <span class="c"># ordered systems — run in this order every tick</span>
+  - ingestSystem
+  - classifySystem
+  - publishSystem
+<span class="f">agents</span>:                  <span class="c"># agents to import at startup (incl. microagents)</span>
+  - 01-classify</code></pre>
+      <p>Two equivalent <strong>dual-mode</strong> layouts are supported and may even coexist during a migration:</p>
+      <div class="grid cols-2">
+        <div class="prim"><h4>Activity-first (recommended)</h4><p class="muted">Everything for one activity grouped under <code>&lt;id&gt;/</code> — <code>activity.yaml</code>, <code>schema.yaml</code>, <code>systems/</code>, <code>db/</code>. Scales nicely when activities are genuinely independent. Paths default off the directory, so a minimal manifest declares only <code>id/name/stages/pipeline/agents</code>.</p></div>
+        <div class="prim"><h4>Legacy central</h4><p class="muted">Each kind namespaced by activity — <code>activities/&lt;id&gt;.yaml</code>, <code>systems/&lt;id&gt;/</code>, <code>schema/&lt;id&gt;.yaml</code>, <code>db/entities/&lt;id&gt;/</code>. Still fully supported; if present it takes precedence and the activity-first scan is additive.</p></div>
+      </div>
+      <p>A <strong>single-activity</strong> project needs neither: the framework synthesizes one <code>default</code> activity over flat <code>db/</code>, so the activity-scoping is invisible. Every <code>Entity</code> / <code>World</code> / component accessor takes the <code>activityId</code> <em>first</em> to keep the layers scoped.</p>
+      <pre><button class="copy">copy</button><code><span class="k">await</span> Activities.<span class="f">loadAll</span>()        <span class="c"># call once at startup (the loop does this)</span>
+Activities.<span class="f">all</span>()                <span class="c"># array of loaded activities</span>
+Activities.<span class="f">get</span> <span class="s">'notes'</span>          <span class="c"># one activity (or the synthesized default)</span>
+Activities.<span class="f">entityDir</span> <span class="s">'notes'</span>    <span class="c"># resolve its entity dir (the Entity hot path)</span></code></pre>
+      <div class="callout note"><p><span class="lbl">CoffeeScript dynamic-import gotcha.</span> CoffeeScript treats <code>import</code> as a static keyword and won't parse <code>await import(path)</code>. Use the JS backtick passthrough: <code>mod = await `import(moduleUrl)`</code>. The registry uses exactly this to load each system module by name.</p></div>
+    </section>
+
+    <hr class="div">
+
+    <!-- ========================= API: ENTITY ========================== -->
+    <section id="api-entity">
+      <h2><span class="pipe-bullet"></span>Entity API <a class="anchor-link" href="#api-entity">#</a></h2>
+      <p class="kicker">Disk-authoritative persistence, static &amp; Golang-style</p>
+      <p><code>Entity</code> is a static singleton; every method takes <code>activityId</code> <em>first</em>, then the entity (or id). There is no per-entity object graph threaded through the loop.</p>
+
+      <h4>Lifecycle &amp; reads</h4>
+      <table>
+        <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>Entity.init(activityId)</code></td><td>Load that activity's dir into the World and start its <code>chokidar</code> watcher (the loop calls this).</td></tr>
+          <tr><td><code>Entity.load(activityId, id)</code></td><td>Full body, mtime-guarded; returns a bare stub if absent. <em>Exception:</em> while a gate is scanning in field-index mode it returns the thin projection.</td></tr>
+          <tr><td><code>Entity.loadFull(activityId, id)</code></td><td>Force the full body (used internally on a query match and on every write path).</td></tr>
+          <tr><td><code>Entity.reload(activityId)</code></td><td>Re-read all of an activity's entities from disk (re-projecting in index mode).</td></tr>
+          <tr><td><code>Entity.save(activityId, entity)</code></td><td>Write <code>&lt;dir&gt;/&lt;id&gt;.yaml</code> (strips bookkeeping keys, LF-normalizes). Prefer the mutation API below.</td></tr>
+          <tr><td><code>Entity.exists(activityId, id)</code></td><td>Has ≥1 revision (honors the projection's <code>_exists</code> marker).</td></tr>
+          <tr><td><code>Entity.snapshot / snapshotAll / count</code></td><td>Read-only cache views for the wire / status.</td></tr>
+          <tr><td><code>Entity.create(activityId, id)</code></td><td>Write an empty stub — <strong>NO-OP if a file already exists</strong> (so a re-create can never clobber a finished entity back to a stub).</td></tr>
+          <tr><td><code>Entity.generateId(seed)</code></td><td>7-char git-style SHA-1 id (deterministic from a seed).</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Mutation — CAS-safe via <code>mutate</code></h4>
+      <table>
+        <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>Entity.mutate(activityId, id, fn)</code></td><td>The blessed write path: <code>begin → fn(entity) → commit</code>, auto-retrying on a fingerprint conflict. Your <code>fn</code> mutates the entity in place; the framework persists it atomically.</td></tr>
+          <tr><td><code>Entity.patch / merge / append / setPath</code></td><td>Convenience writers (replace a component / shallow-merge / push to an array / set a dot-path) — each routes through <code>mutate</code>.</td></tr>
+          <tr><td><code>Entity.transition(activityId, id, stage, extra)</code></td><td>Advance a <code>workflow._stage</code>-style entity to a new stage with extra fields.</td></tr>
+          <tr><td><code>Entity.drop(activityId, id, keys)</code></td><td><strong>Re-queue / rewind</strong> by removing component keys — the archetype-presence query re-picks the entity at the earliest missing stage. The basis of verify→refine loops.</td></tr>
+          <tr><td><code>Entity.recordError(activityId, id, err)</code> · <code>Entity.inBackoff(entity)</code></td><td>Increment the retry counter / test the post-error backoff window.</td></tr>
+          <tr><td><code>Entity.begin / commit / rollback</code></td><td>The low-level <a href="#cas">optimistic-concurrency primitives</a> <code>mutate</code> is built on.</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Selection &amp; memory</h4>
+      <table>
+        <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>Entity.query(activityId, predicate, opts)</code></td><td>The entity-selection seam. Scans the World, runs the async gate predicate, returns up to <code>opts.limit ?? pipeline_width</code> <em>full</em> entities. <code>opts.exclude</code> skips in-flight ids; <code>opts.order:'mtime'</code> is oldest-first (fairness).</td></tr>
+          <tr><td><code>Entity.evict(activityId, id)</code></td><td>Drop one body from the cache (streaming / memory).</td></tr>
+          <tr><td><code>Entity.evictHydrated(activityId)</code> · <code>evictHydratedOne(activityId, id)</code></td><td>Re-project the hydrated set back to thin projections — the <a href="#field-index">field-index</a> GC (whole-activity, or per-entity for the worker pools).</td></tr>
+          <tr><td><code>Entity.allIds(activityId)</code></td><td>Ids currently cached (the walk-harness scoped view).</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ========================= API: WORLD =========================== -->
+    <section id="api-world">
+      <h2><span class="pipe-bullet"></span>World &amp; query <a class="anchor-link" href="#api-world">#</a></h2>
+      <p class="kicker">The cache layer (performance only)</p>
+      <p>The <code>World</code> is the in-memory cache; disk stays authoritative. Systems never touch it directly — they pull via <code>Entity.query</code> — but it's there for tooling.</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { World } <span class="k">from</span> <span class="s">'pipeline'</span>   <span class="c"># or _G.World</span>
+W = World.<span class="f">for</span> activityId                  <span class="c"># this activity's cache handle</span>
+W.<span class="f">Entity__find</span> (e) -&gt; e.workflow?._stage <span class="k">is</span> <span class="s">'captured'</span>   <span class="c"># the core query primitive</span>
+W.<span class="f">get</span> id    ·   W.<span class="f">all</span>()    ·   W.<span class="f">count</span>()</code></pre>
+    </section>
+
+    <!-- ====================== API: COMPONENT ========================== -->
+    <section id="api-component">
+      <h2><span class="pipe-bullet"></span>defineComponent <a class="anchor-link" href="#api-component">#</a></h2>
+      <p class="kicker">Generated, validated accessors</p>
+      <p><code>defineComponent(name, fields)</code> generates a validated getter (<code>camelCase(field)</code>) and setter (<code>set</code> + <code>PascalCase(field)</code>) per field. Each accessor calls <code>SchemaValidator.check</code> with the calling subject before touching disk — so the ACL is enforced on every read and write.</p>
+      <pre><button class="copy">copy</button><code><span class="k">export</span> ReviewComponent = <span class="f">defineComponent</span> <span class="s">'review'</span>, [<span class="s">'approved_by'</span>, <span class="s">'approved_at'</span>]
+
+approver = <span class="k">await</span> ReviewComponent.<span class="f">approvedBy</span> SUBJECT, activityId, id        <span class="c"># getter</span>
+<span class="k">await</span> ReviewComponent.<span class="f">setApprovedAt</span> SUBJECT, activityId, id, isoNow            <span class="c"># setter</span></code></pre>
+      <p>For multi-field or array writes, subclass <code>Component</code> and call <code>@check(subject, field)</code> per field — then list the method→fields mapping in <code>schema-aliases.yaml</code> so <code>pipeline check</code> can trace the compound write.</p>
+    </section>
+
+    <!-- ====================== API: VALIDATOR ========================== -->
+    <section id="api-validator">
+      <h2><span class="pipe-bullet"></span>SchemaValidator <a class="anchor-link" href="#api-validator">#</a></h2>
+      <p class="kicker">The runtime ACL enforcer</p>
+      <pre><button class="copy">copy</button><code><span class="k">import</span> { SchemaValidator } <span class="k">from</span> <span class="s">'pipeline'</span>
+SchemaValidator.<span class="f">check</span> subject, component, field   <span class="c"># fatal (exit 1) if the subject isn't allow-listed</span>
+SchemaValidator.<span class="f">checkScalar</span> subject, scalarName    <span class="c"># same, for top-level scalar fields</span></code></pre>
+      <p>It reads <code>schema.yaml</code> <em>fresh on every call</em> (no caching), so allowlist edits hot-reload with no restart. A component declared in multiple schema files has its <code>subjects[]</code> allowlists <strong>unioned</strong>.</p>
+    </section>
+
+    <!-- ======================== API: CONFIG =========================== -->
+    <section id="api-config">
+      <h2><span class="pipe-bullet"></span>Config knobs <a class="anchor-link" href="#api-config">#</a></h2>
+      <p class="kicker">config.yaml — loop tuning</p>
+      <table>
+        <thead><tr><th>Key</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>dir name</td><td>Display name in the loop banner.</td></tr>
+          <tr><td><code>model</code></td><td><code>copilot:claude-sonnet-4.6</code></td><td>Default microagent model.</td></tr>
+          <tr><td><code>pipeline_width</code></td><td><code>3</code></td><td>Max entities a stage processes concurrently — the <strong>per-stage</strong> concurrency cap.</td></tr>
+          <tr><td><code>loop_interval_ms</code></td><td><code>5000</code></td><td>Idle backoff for a worker whose gate is empty.</td></tr>
+          <tr><td><code>concurrency</code></td><td><code>6</code></td><td>agl-ai concurrency cap.</td></tr>
+          <tr><td><code>retry.max_count</code></td><td><code>5</code></td><td>Retries before an entity stalls in place.</td></tr>
+          <tr><td><code>retry.backoff_ms</code></td><td><code>60000</code></td><td>Backoff window after each error.</td></tr>
+          <tr><td><code>parallel_activities</code></td><td><code>true</code></td><td>Run multiple activities' worker pools together.</td></tr>
+          <tr><td><code>max_total_inflight</code></td><td><em>off</em></td><td>Optional global cap on the sum of in-flight entities across all stages.</td></tr>
+          <tr><td><code>stage_timeout_ms</code></td><td><code>{}</code></td><td>Per-stage per-entity hard timeout (e.g. <code>{ verifySystem: 300000 }</code>).</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <hr class="div">
+
+    <!-- ========================= SUBJECTS ============================= -->
+    <section id="subjects">
+      <h2><span class="pipe-bullet"></span>Subject identity <a class="anchor-link" href="#subjects">#</a></h2>
+      <p class="kicker">Every accessor's first argument is "who's asking"</p>
+      <p>The ACL is enforced against a stable, path-independent identity string — not the file's location. Declare it as a top-of-file constant (<code>SYSTEM = '…'</code>) so both the runtime and the linter can resolve it.</p>
+      <table>
+        <thead><tr><th>Caller</th><th>Pattern</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td>System</td><td><code>system:&lt;entity&gt;/&lt;basename&gt;</code></td><td><code>system:notes/classify</code></td></tr>
+          <tr><td>Agent (incl. microagent)</td><td><code>agent:&lt;entity&gt;/&lt;label&gt;</code></td><td><code>agent:notes/classify</code></td></tr>
+          <tr><td>HTTP route</td><td><code>route:&lt;entity&gt;/:uid/&lt;verb&gt;</code></td><td><code>route:notes/:uid/approve</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- =========================== CHECK ============================== -->
+    <section id="check">
+      <h2><span class="pipe-bullet"></span>pipeline check — the static linter <a class="anchor-link" href="#check">#</a></h2>
+      <p class="kicker">The build fails before you ever run</p>
+      <p>The static analyzer validates the whole contract at once:</p>
+      <ul>
+        <li>Every <code>Component.method SUBJECT, …</code> call site is checked against the schema allowlists; <strong>dangling</strong> (unreferenced) fields are reported.</li>
+        <li><strong>Gate wrapping</strong> — gate-ish lines must use <code>Gate(...)</code> (a deliberate exception carries <code>&#35; gate:ignore</code>).</li>
+        <li><strong>Field-index</strong> — every gate-read field must be in the system's <code>GATE_FIELDS</code> (coverage) and be a real schema field (existence); over-declaration warns.</li>
+      </ul>
+      <p>Project-specific compound accessors are declared in a project-root <code>schema-aliases.yaml</code>. Keep <code>pipeline check</code> green — it is the contract's CI gate.</p>
+    </section>
+
+    <!-- =========================== REVIEW ============================= -->
+    <section id="review">
+      <h2><span class="pipe-bullet"></span>pipeline review — LLM convention rules <a class="anchor-link" href="#review">#</a></h2>
+      <p class="kicker">Judgment a compiler can't express</p>
+      <p>Where <code>pipeline check</code> enforces the mechanical schema/ACL contract, <code>pipeline review</code> runs bundled <code>code-review</code> rules — the <em>subjective</em> conventions an AST can't easily express (e.g. "every entity write must go through the transaction API"). Use both as the green bar before merging.</p>
+      <div class="callout why"><p><span class="lbl">The ratchet.</span> When you discover an invariant the codebase should always hold: (1) write a <code>code-review</code> rule for it, (2) run it and confirm the current offenders go RED, (3) fix until GREEN, (4) commit the rule with the change. The invariant is now enforced forever — every hardening buys a permanent, observable check.</p></div>
+    </section>
+
+    <!-- =========================== GENDOCS ============================ -->
+    <section id="gendocs">
+      <h2><span class="pipe-bullet"></span>pipeline docs — docs that can't drift <a class="anchor-link" href="#gendocs">#</a></h2>
+      <p class="kicker">Generated from the source of truth</p>
+      <p><code>pipeline docs</code> regenerates the at-a-glance reference — pipeline → stage → system → component → field → subject, plus the <em>Gate Logic</em> table — directly from the schema and the <code>Gate(...)</code> markers. Because it is generated, the reference can't fall out of sync with the code.</p>
+    </section>
+
+    <!-- ============================= CLI ============================== -->
+    <section id="cli">
+      <h2><span class="pipe-bullet"></span>CLI reference <a class="anchor-link" href="#cli">#</a></h2>
+      <p class="kicker">Everything the <code>pipeline</code> command does</p>
+      <table>
+        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>pipeline new &lt;project&gt; [--activity &lt;id&gt; [--stages a,b,c]]…</code></td><td>Scaffold a new activity-first project. Repeat <code>--activity</code> to add activities; <code>--stages</code> scopes to the current one.</td></tr>
+          <tr><td><code>pipeline g &lt;kind&gt; &lt;name&gt;</code> <span class="muted">(aliases: <code>generate</code>, <code>g</code>)</span></td><td>Generate one <code>system</code> | <code>component</code> | <code>microagent</code>, wired to the schema and conventions.</td></tr>
+          <tr><td><code>pipeline check</code></td><td>Static schema/ACL + gate + field-index linter (exit 1 on violation).</td></tr>
+          <tr><td><code>pipeline review [--pr &lt;url&gt;]</code></td><td>Run the LLM <code>code-review</code> convention rules.</td></tr>
+          <tr><td><code>pipeline docs</code></td><td>Regenerate the at-a-glance reference tables from source.</td></tr>
+          <tr><td><code>pipeline run [args…]</code></td><td>Run the agent loop. cwd-locked via <code>.pipeline.lock</code> (one loop per project); <code>--force</code> / <code>--no-lock</code> to override.</td></tr>
+          <tr><td><code>pipeline walk [selectors…]</code></td><td>The dev/debug harness — a selection of entities × a selection of stages. <code>--entity &lt;id&gt;</code> / <code>--entities &lt;list|a..b|n..m&gt;</code>, <code>--stage</code> / <code>--stages</code>, <code>--activity &lt;glob&gt;</code>, <code>--once</code>, <code>--verbose</code>, <code>--json</code>.</td></tr>
+          <tr><td><code>pipeline status</code></td><td>Per-stage entity snapshot.</td></tr>
+          <tr><td><code>pipeline help</code></td><td>The full command list.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <hr class="div">
+
+    <!-- ========================= INVARIANTS =========================== -->
+    <section id="invariants">
+      <h2><span class="pipe-bullet"></span>The 14 invariants <a class="anchor-link" href="#invariants">#</a></h2>
+      <p class="kicker">The contract every pipeline adheres to</p>
+      <p>These are the non-negotiables — enforced structurally by the <code>SchemaValidator</code> + <code>pipeline check</code>, and subjectively by <code>pipeline review</code>. If you only memorize one section before contributing, make it this one.</p>
+      <table>
+        <thead><tr><th>#</th><th>Invariant</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>Disk is authoritative; the World cache is only a performance layer.</strong> Crash and resume every entity where it left off. A <code>chokidar</code> watcher syncs operator edits back each tick.</td></tr>
+          <tr><td>2</td><td><strong>Systems pull, they are never pushed.</strong> A system's first act is <code>Entity.query</code>. Passing an entity/store into a system is an anti-pattern.</td></tr>
+          <tr><td>3</td><td><strong>Query by component <em>presence</em></strong> (archetype-style). An entity is defined by which components it has; it accretes them as systems refine it.</td></tr>
+          <tr><td>4</td><td><strong>Static, Golang-style models.</strong> <code>Entity</code>/<code>World</code> are static singletons; methods take <code>activityId</code> first.</td></tr>
+          <tr><td>5</td><td><strong>Microagents do judgment only.</strong> I/O, parsing, retries, side-effects, final formatting stay out of the model. The calling system owns every save.</td></tr>
+          <tr><td>6</td><td><strong>Human gates are fields on disk, edited asynchronously.</strong> A null gate field = no-op this entity; a truthy value = advance. A gate never blocks the loop for <em>other</em> entities.</td></tr>
+          <tr><td>7</td><td><strong>Machine vs human fields by convention.</strong> A leading <code>_</code> means machine-managed; an unprefixed field is the operator's.</td></tr>
+          <tr><td>8</td><td><strong>Stage lives inside the entity; files never move.</strong> Either <code>workflow._stage</code> or status + component-presence — <code>Entity.query</code> is agnostic.</td></tr>
+          <tr><td>9</td><td><strong>Systems run in configurable order</strong>, with bounded parallelism (<code>pipeline_width</code>) and per-entity retry/backoff.</td></tr>
+          <tr><td>10</td><td><strong>Schema is the single source of truth + a per-field ACL.</strong> Every field declares a <code>subjects:</code> allowlist; the validator is fatal on violation.</td></tr>
+          <tr><td>11</td><td><strong>Re-queue by component-deletion.</strong> <code>Entity.drop(...)</code> the keys; the archetype query re-picks the entity at the earliest missing stage. The basis of verify→refine loops.</td></tr>
+          <tr><td>12</td><td><strong>Maker ≠ Checker.</strong> The generator and each critic are distinct subjects (ideally distinct models) so nothing grades its own output.</td></tr>
+          <tr><td>13</td><td><strong>Gate logic goes through the <code>Gate(...)</code> marker</strong> — enforceable, debuggable, self-documenting.</td></tr>
+          <tr><td>14</td><td><strong>Field-index: selection runs on a projection; bodies hydrate on match.</strong> (Opt-in low-memory selection at scale — see below.)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ========================= FIELD-INDEX ========================== -->
+    <section id="field-index">
+      <h2><span class="pipe-bullet"></span>Field-index — low-memory selection at scale <a class="anchor-link" href="#field-index">#</a></h2>
+      <p class="kicker">How 1,000+ multi-megabyte entities stay in RAM</p>
+      <div class="callout story"><p><span class="lbl">War story.</span> The original loop bulk-loaded all 1,015 entities — 2.9&nbsp;GB of YAML, individual files up to 33&nbsp;MB — into the World cache, ballooning RSS to ~20&nbsp;GB. The fix wasn't "load less data," it was "load only the fields the gates actually read."</p></div>
+      <p>When <code>_G.useFieldIndex</code> is on <em>and</em> an activity declares an index — the union of its systems' exported <code>GATE_FIELDS</code> — the World holds only a thin <strong>projection</strong> of each entity (its id + those dot-paths) instead of the full body. The mechanics:</p>
+      <ul>
+        <li><strong>Declare</strong> per system: <code>export GATE_FIELDS = ['fetch.status', 'verify.pass', …]</code> — the <code>&lt;component&gt;.&lt;field&gt;</code> paths its gate reads. The activity's index is the union across its pipeline.</li>
+        <li><strong>Scan on projections.</strong> The gate predicate reads the cheap resident projection — fast, no disk.</li>
+        <li><strong>Hydrate on match.</strong> <code>Entity.query</code> then loads each match's full body from disk before handing it to the system fn.</li>
+        <li><strong>Re-project at the boundary.</strong> <code>evictHydrated</code> drops the hydrated set back to projections — the stage-boundary GC (per-entity <code>evictHydratedOne</code> for the worker pools).</li>
+      </ul>
+      <div class="callout tip"><p><span class="lbl">The safety property.</span> <code>Entity.load</code> returns the projection <strong>only while a gate is scanning</strong> (tracked per async-context). Every other load — and therefore every write path — sees a full body, so projections never truncate on save. Activities that declare no <code>GATE_FIELDS</code> stay in full-body mode (back-compat). <code>pipeline check</code> enforces coverage + existence.</p></div>
+    </section>
+
+    <!-- ============================= CAS ============================== -->
+    <section id="cas">
+      <h2><span class="pipe-bullet"></span>CAS — the lost-update fix <a class="anchor-link" href="#cas">#</a></h2>
+      <p class="kicker">Optimistic concurrency on a cheap fingerprint</p>
+      <div class="callout story"><p><span class="lbl">War story.</span> Under wide concurrency, fully-processed entities were silently <em>rewound</em> to an earlier stage and the settled count <em>shrank</em>. The cause: every component setter did load → assign → whole-file save, so two concurrent setter chains on the same entity clobbered each other — the second save built from a stale base.</p></div>
+      <p>The fix is optimistic concurrency control on a cheap <code>mtimeMs:size</code> fingerprint:</p>
+      <ul>
+        <li><code>Entity.begin / commit / rollback</code> — a transaction whose state rides on <code>entity._txn</code>; <code>commit()</code> re-stats the file and, on a fingerprint mismatch, returns a conflict with <em>no write</em>.</li>
+        <li><code>Entity.mutate(id, fn)</code> — the convenience wrapper: <code>begin → fn → commit</code>, auto-retrying on conflict (bounded). <strong>This is the blessed write path</strong>; the convenience writers (<code>patch/merge/append/setPath/drop/transition</code>) all route through it.</li>
+        <li>Writes are <strong>atomic</strong> (temp file + rename), which also fixes crash-truncation.</li>
+        <li><code>Entity.create</code> is a <strong>no-op when the file exists</strong> — killing the re-create rewind path independent of cache correctness.</li>
+      </ul>
+      <div class="callout tip"><p><span class="lbl">The convention rule.</span> A <code>code-review</code> rule (<code>pipeline-persistence-via-transaction</code>) flags any setter that slips back to a raw <code>Entity.save</code> — so the lost-update class can never silently return. The rule <em>is</em> the spec and the regression test.</p></div>
+    </section>
+
+    <!-- =========================== WORKERS ============================ -->
+    <section id="workers">
+      <h2><span class="pipe-bullet"></span>Worker-pool stages — per-stage concurrency <a class="anchor-link" href="#workers">#</a></h2>
+      <p class="kicker">A slow stage no longer blocks the loop</p>
+      <div class="callout story"><p><span class="lbl">War story.</span> The original loop swept stages serially to completion every tick. One slow stage (a 1–3&nbsp;min browser render) head-of-line-blocked the entire loop — resolve, publish, and report sat idle while verify ground through its queue.</p></div>
+      <p>Now every stage runs as its own <strong>continuous worker pool</strong>, all concurrent. <code>pipeline_width</code> is the max concurrency <em>per stage</em>: at width 3, up to 3 resolve <em>and</em> 3 publish <em>and</em> 3 verify run at once. Each worker polls its gate, claims up to <code>width − inflight</code> eligible entities (excluding ones it's already processing), runs each, and refills a slot the instant one finishes.</p>
+      <p>A system opts in by exporting the two seams alongside its <code>*System</code> fn (which stays for <code>pipeline walk</code>):</p>
+      <pre><button class="copy">copy</button><code><span class="k">export</span> selectEligible = (activityId, { exclude, limit }) -&gt;   <span class="c"># the gate, in-flight-excluded</span>
+  matches = <span class="k">await</span> Entity.<span class="f">query</span> activityId, GATE, { exclude, limit, order: <span class="s">'mtime'</span> }
+  (String(e.id) <span class="k">for</span> e <span class="k">in</span> matches)
+
+<span class="k">export</span> processOne = (activityId, id) -&gt; <span class="k">await</span> <span class="f">doOneEntity</span> id   <span class="c"># process exactly one</span>
+<span class="k">export</span> onTimeout = (activityId, id) -&gt; …   <span class="c"># optional: mark a wedged entity terminal</span>
+<span class="k">export</span> cleanup   = -&gt; …                    <span class="c"># optional: close a pool once at drain</span></code></pre>
+      <div class="callout note"><p><span class="lbl">Safety valves.</span> A per-stage <code>stage_timeout_ms</code> aborts a pathological entity (e.g. verify past 5&nbsp;min), marks it terminal so its slot frees, and the stage keeps flowing. Graceful shutdown drains in-flight entities (a second Ctrl-C force-quits). And because writes are <a href="#cas">CAS-safe</a>, concurrent stages writing the corpus can't lose updates. A legacy <code>fn</code>-only system still runs — wrapped as a concurrent batch loop.</p></div>
+    </section>
+
+    <!-- ============================ TIERS ============================= -->
+    <section id="tiers">
+      <h2><span class="pipe-bullet"></span>Two-tier package surface <a class="anchor-link" href="#tiers">#</a></h2>
+      <p class="kicker">A UI can read entities without the loop</p>
+      <table>
+        <thead><tr><th>Import</th><th>Tier</th><th>Provides</th><th>Who imports it</th></tr></thead>
+        <tbody>
+          <tr><td><code>pipeline/data</code></td><td>DATA / ORM</td><td><code>_G</code>, <code>Entity</code>, <code>World</code>, <code>Activities</code>, <code>SchemaValidator</code>, <code>Component</code>, <code>defineComponent</code>, <code>normalizeStrings</code></td><td>a thin client (UI) — reads/writes entities, knows nothing about stages</td></tr>
+          <tr><td><code>pipeline</code></td><td>DATA + ECS</td><td>the DATA tier <strong>plus</strong> <code>Gate</code> / <code>gateTrace</code> / <code>loadConfig</code> / <code>runPipeline</code> / <code>runWalk</code> / <code>Telemetry</code> / <code>pMap</code></td><td>the agent / loop driver</td></tr>
+        </tbody>
+      </table>
+      <p>Both resolve to the same singleton <code>Entity</code> / <code>World</code> / <code>Activities</code>, so they share one on-disk source of truth — a UI just can't accidentally reach into the loop or the field-index.</p>
+    </section>
+
+    <!-- =========================== STORIES ============================ -->
+    <section id="stories">
+      <h2><span class="pipe-bullet"></span>War stories — the "why" behind the design <a class="anchor-link" href="#stories">#</a></h2>
+      <p class="kicker">Every guardrail earned its place</p>
+      <p>This framework was forged migrating ~1,000 Kibana dashboards. Each invariant traces to a real failure:</p>
+      <div class="grid cols-2">
+        <div class="prim"><h4>🌩️ Infra ≠ defect</h4><p class="muted">A flaky cluster intermittently 404s with <code>node_disconnected</code> even when <code>_remote/info</code> says "connected." A verify stage classifies these as <code>infra</code> and leaves the entity stuck <em>without</em> a refine — never thrash the corpus during an outage. <strong>That distinction is why the classification exists.</strong></p></div>
+        <div class="prim"><h4>📌 Cluster-pin invariant</h4><p class="muted">A data-view title that pins a literal cluster (<code>tic-…-prod-03:…</code>) errors the whole panel when that one node blips. The cluster segment <em>must</em> be a wildcard <code>*</code> — the resolver blocks a pinned title and rewrites it on copy.</p></div>
+        <div class="prim"><h4>🔁 Idempotent by title, not id</h4><p class="muted">Kibana's <code>_import</code> <em>remaps</em> saved-object ids across spaces. So copy-to-scratchpad must be idempotent <strong>by title</strong> — and re-importing a shared firehose data view per-entity once produced an <code>ambiguous_conflict</code> that stranded a whole class until find-or-reuse fixed it.</p></div>
+        <div class="prim"><h4>🧪 Couldn't grade itself</h4><p class="muted">An A/B vision judge once flipped its verdict between runs because it misread a mid-load spinner in the source screenshot as "had data." The fix taught the judge that a loading spinner is <em>not</em> evidence — the same Maker≠Checker discipline, applied to perception.</p></div>
+      </div>
+      <div class="callout why"><p><span class="lbl">The throughline.</span> Every one of these is the same lesson: <strong>when a deterministic step can't decide, it must stay stuck and self-explain — never guess, never thrash.</strong> The loop makes that cheap (the bad item waits; everything else flows), and the guardrails make it observable (<code>gateTrace</code>, <code>block_reason</code>, the generated docs).</p></div>
+    </section>
+
+    <!-- ========================== SOURCEMAP =========================== -->
+    <section id="sourcemap">
+      <h2><span class="pipe-bullet"></span>Source map — where everything lives <a class="anchor-link" href="#sourcemap">#</a></h2>
+      <p class="kicker">~2,560 lines, 15 files</p>
+      <table>
+        <thead><tr><th>File</th><th>~LOC</th><th>Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td><code>src/entity.coffee</code></td><td>541</td><td>Disk-authoritative persistence: load/save, the CAS transaction API (<code>begin/commit/rollback/mutate</code>), <code>query</code>, the field-index projection/hydration, atomic writes.</td></tr>
+          <tr><td><code>src/walk.coffee</code></td><td>487</td><td>The <code>pipeline walk</code> harness: entity × stage selection, gate-trace + component-diff rendering, the streaming progress meter.</td></tr>
+          <tr><td><code>src/loop.coffee</code></td><td>415</td><td><code>runPipeline</code>: the dual-mode entry, the per-stage worker pools, the supervisor, graceful shutdown, the single-activity synthesis.</td></tr>
+          <tr><td><code>src/activities.coffee</code></td><td>235</td><td>The activity registry: dual-mode discovery, manifest loading, dynamic system/agent import, the <code>GATE_FIELDS</code> union.</td></tr>
+          <tr><td><code>src/console.coffee</code></td><td>178</td><td>The pastel structured logger + the live <code>RunMeter</code> status line.</td></tr>
+          <tr><td><code>src/globals.coffee</code></td><td>167</td><td><code>_G</code>: the singleton config + activity context (AsyncLocalStorage) + <code>_G.log</code>.</td></tr>
+          <tr><td><code>src/schema-validator.coffee</code></td><td>109</td><td>The runtime ACL: <code>check</code> / <code>checkScalar</code>, reading schema fresh + unioning allowlists.</td></tr>
+          <tr><td><code>src/telemetry.coffee</code></td><td>88</td><td>Per-activity counters + timers for the status line.</td></tr>
+          <tr><td><code>src/config.coffee</code></td><td>74</td><td><code>loadConfig</code> / <code>loadConfigKnobs</code> — snake_case YAML → <code>_G</code>.</td></tr>
+          <tr><td><code>src/world.coffee</code></td><td>71</td><td>The per-activity in-memory cache + <code>Entity__find</code> query primitive.</td></tr>
+          <tr><td><code>src/gate.coffee</code></td><td>57</td><td>The <code>Gate(...)</code> marker + <code>gateTrace</code> + the per-entity gate log.</td></tr>
+          <tr><td><code>src/component.coffee</code></td><td>53</td><td><code>Component</code> base + <code>defineComponent</code> (validated getter/setter generation).</td></tr>
+          <tr><td><code>src/pmap.coffee</code></td><td>39</td><td>Bounded-concurrency async map — the primitive the worker pools and batch fallbacks use.</td></tr>
+          <tr><td><code>src/data.coffee</code></td><td>29</td><td>The DATA-tier re-export surface (<code>pipeline/data</code>).</td></tr>
+          <tr><td><code>src/normalize.coffee</code></td><td>20</td><td>String normalization for stable YAML round-trips.</td></tr>
+        </tbody>
+      </table>
+      <p>The CLI lives in <code>cli/</code> (<code>new</code>, <code>generate</code>, <code>check</code>, <code>review</code>, <code>docs</code>, <code>run</code>, <code>walk</code>, <code>status</code>, <code>lock</code>) dispatched by <code>bin/pipeline.mjs</code>. Deeper reference: <code>docs/ARCHITECTURE.md</code>, <code>docs/SCHEMA.md</code>, <code>docs/ACTIVITY.md</code>, and the microagent contract shipped by <code>agl-ai</code>.</p>
+    </section>
+
+    <!-- ============================ FOOTER ============================ -->
+    <div class="foot">
+      <div class="pipe-row"><span></span><span></span><span></span></div>
+      <p><strong>Agent Pipeline</strong> — a framework for building agents that run as a loop, not a script.<br>
+      Crunchy code fuel. Power your play. 🥣</p>
+      <p class="muted">Built on Bun + CoffeeScript · ECS + microagents + guardrails · docs generated for the <code>docs</code> branch.</p>
+    </div>
+
+  </div>
+  </main>
+</div>
+
+<script>
+  // sidebar active-link highlighting via IntersectionObserver
+  const links = [...document.querySelectorAll('.sidebar a.nav-link')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const sections = [...document.querySelectorAll('section[id]')];
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = map.get(e.target.id);
+        if (a) a.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-40% 0px -55% 0px', threshold: 0 });
+  sections.forEach(s => obs.observe(s));
+
+  // mobile nav toggle
+  const sb = document.getElementById('sidebar');
+  document.getElementById('navToggle')?.addEventListener('click', () => sb.classList.toggle('open'));
+  sb.addEventListener('click', e => { if (e.target.matches('a.nav-link')) sb.classList.remove('open'); });
+
+  // copy-to-clipboard on code blocks
+  document.querySelectorAll('pre .copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.parentElement.querySelector('code')?.innerText ?? '';
+      navigator.clipboard.writeText(code).then(() => {
+        const t = btn.textContent; btn.textContent = 'copied!';
+        setTimeout(() => btn.textContent = t, 1200);
+      });
+    });
+  });
+</script>
+</body>
+</html>
