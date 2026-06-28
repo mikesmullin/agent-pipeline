@@ -385,7 +385,19 @@ export runPipeline = (opts = {}) ->
 
   # Wire agl-ai defaults (both modes).
   Agent.default.model = _G.MODEL if Agent?.default?
-  Agent.default.concurrency = _G.concurrency if Agent?.default?
+  # agl-ai serializes every Agent.run() through a single global FIFO gate
+  # (Agent.default.concurrency, default 1). Under the worker-pool model each stage
+  # processes up to `pipelineWidth` entities at once, so an LLM stage (judge /
+  # report / a microagent) issues up to `pipelineWidth` concurrent run() calls —
+  # if the gate is below that, the surplus calls QUEUE and the back of the queue
+  # trips its per-entity stage timeout (a false 'timeout' on a call that was only
+  # starved). So the gate must be AT LEAST pipelineWidth. We set it to the max of
+  # the explicit `concurrency` knob and the (post-`--width`) pipelineWidth, so it
+  # never starves and an explicit higher value still wins. NOTE: this only takes
+  # effect when the framework and the host project share ONE agl-ai instance
+  # (e.g. both `bun link agl-ai`) — otherwise this writes a different Agent
+  # singleton than the activity's microagents use.
+  Agent.default.concurrency = Math.max((_G.concurrency ? 1), (_G.pipelineWidth ? 1)) if Agent?.default?
 
   _teeDebugLog()
   pidFile = await _pidGuard()
