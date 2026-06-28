@@ -18,6 +18,7 @@ import { readFile, writeFile, mkdir, readdir, stat, rename } from 'fs/promises'
 import { resolve, basename } from 'path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { createHash } from 'crypto'
+import { AsyncLocalStorage } from 'async_hooks'
 import chokidar from 'chokidar'
 import { _G } from './globals.coffee'
 import './world.coffee'
@@ -69,9 +70,14 @@ _watchers = {}   # activityId → FSWatcher
 # cheap resident projection (that is the whole point: gate predicates read only
 # the indexed fields, fast, in memory). Because every NON-scan load returns a full
 # body, all WRITE paths (component setters, fetch, server routes) are inherently
-# safe — they never see a truncated projection. Scanning is tracked per-activity
-# so parallel activities don't bleed each other's flag.
-_scanning = {}   # activityId → bool (true only inside that activity's query scan)
+# safe — they never see a truncated projection. Scanning is tracked per-async-
+# context (AsyncLocalStorage), NOT a global flag, so when stages run as concurrent
+# workers, one stage's in-progress selection scan can never make ANOTHER stage's
+# `processOne` read resolve to a projection — only the scanning async chain itself
+# sees the flag. `_scanCtx` stores the activityId currently being scanned by this
+# async context.
+_scanCtx = new AsyncLocalStorage()   # store: { activityId } while inside that activity's query scan
+_isScanning = (activityId) -> _scanCtx.getStore()?.activityId is activityId
 
 _indexFieldsFor = (activityId) ->
   return null unless _G.useFieldIndex
@@ -190,7 +196,7 @@ _G.Entity = class Entity
   # index mode, return the resident projection (fast, no disk) — that is how gate
   # predicates read indexed fields cheaply. Returns a bare stub if no file exists.
   @load: (activityId, id) ->
-    if _scanning[activityId] and _indexFieldsFor(activityId)?
+    if _isScanning(activityId) and _indexFieldsFor(activityId)?
       return _G.World.for(activityId).get(String id) ? { id: String id }
     await @loadFull activityId, id
 
@@ -328,6 +334,22 @@ _G.Entity = class Entity
     _G._hydratedThisStage?[activityId] = []
     undefined
 
+  # Per-entity GC — re-project ONE hydrated body back to a thin projection. The
+  # worker-pool model has no stage boundary, so each stage worker calls this after
+  # it finishes one entity (instead of the whole-activity `evictHydrated`), keeping
+  # at most `width × stageCount` full bodies resident. No-op when unindexed.
+  @evictHydratedOne: (activityId, id) ->
+    indexFields = _indexFieldsFor activityId
+    return unless indexFields?
+    W = _G.World.for activityId
+    e = W.get String(id)
+    W.set _project(e, indexFields) if e?._full
+    list = _G._hydratedThisStage?[activityId]
+    if Array.isArray list
+      idx = list.indexOf String(id)
+      list.splice idx, 1 if idx >= 0
+    undefined
+
   # ── Mutation API (id-first, CAS-safe via @mutate) ──────────────────────────
 
   # Replace one top-level component (key) on the entity.
@@ -444,21 +466,33 @@ _G.Entity = class Entity
   # back to projections by `evictHydrated` at the stage boundary.
   @query: (activityId, predicate, opts = {}) ->
     limit = opts.limit ? _G.pipelineWidth
+    # `exclude` (Set or array of ids) skips entities a concurrent stage worker is
+    # already processing — so the worker never re-claims an in-flight entity.
+    # `order` orders the pool before scanning ('mtime' = oldest-eligible first for
+    # fairness; default = World order).
+    excl = opts.exclude
+    isExcluded =
+      if excl instanceof Set then ((id) -> excl.has String id)
+      else if Array.isArray excl then (do -> s = new Set(excl.map String); (id) -> s.has id)
+      else (-> false)
     indexFields = _indexFieldsFor activityId
     matched = []
     pool = _G.World.for(activityId).all()
     if _G.onlyEntity?
       pool = pool.filter (e) -> String(e.id) is String(_G.onlyEntity)
-    _scanning[activityId] = true
-    try
+    if opts.order is 'mtime'
+      pool = pool.slice().sort (a, b) -> (a._mtime ? 0) - (b._mtime ? 0)
+    # Scan inside an AsyncLocalStorage context so `load` resolves to the cheap
+    # projection for THIS scan only — a concurrent stage's processOne (a different
+    # async chain) still reads full bodies.
+    await _scanCtx.run { activityId }, =>
       for entity in pool
+        continue if isExcluded entity.id
         _G.currentEntityId = entity.id
         result = await predicate entity
         continue if result is false
         matched.push entity
         break if matched.length >= limit
-    finally
-      _scanning[activityId] = false
     # Hand back full bodies. In index mode hydrate each match from disk and track
     # it for stage-boundary eviction; otherwise the resident object is already full.
     return matched unless indexFields?

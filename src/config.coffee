@@ -35,6 +35,8 @@ export loadConfigKnobs = ->
     concurrency:    cfg.concurrency
     retry: if cfg.retry then { maxCount: cfg.retry.max_count, backoffMs: cfg.retry.backoff_ms } else undefined
   _G.parallelActivities = cfg.parallel_activities if cfg.parallel_activities?
+  _G.maxTotalInflight   = cfg.max_total_inflight if cfg.max_total_inflight?
+  _G.stageTimeoutMs     = cfg.stage_timeout_ms   if cfg.stage_timeout_ms?
   cfg
 
 export loadConfig = ->

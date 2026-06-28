@@ -87,7 +87,20 @@ _buildActivity = (cfg, ctx) ->
     fn = mod[sysName] ? mod.default
     unless typeof fn is 'function'
       throw new Error "activity #{cfg.id}: #{modulePath} does not export #{sysName}"
-    pipelineFns.push { name: sysName, fn }
+    # Worker-pool seams (STAGE_CONCURRENCY_PLAN): a system may ALSO export
+    # `selectEligible(activityId,{exclude,limit})` + `processOne(activityId,id)`
+    # so the framework can run it as a continuous per-entity worker (slots refill
+    # as entities finish). `onTimeout(activityId,id)` marks an over-long entity
+    # blocked; `cleanup()` runs once at loop shutdown (e.g. close a browser pool).
+    # A system exporting ONLY the legacy `fn` still runs — the worker falls back
+    # to looping `fn()` (batch-of-width) with idle backoff.
+    pipelineFns.push {
+      name: sysName, fn
+      selectEligible: mod.selectEligible ? null
+      processOne:     mod.processOne ? null
+      onTimeout:      mod.onTimeout ? null
+      cleanup:        mod.cleanup ? null
+    }
     # GATE_FIELDS union → the World projection (field-index). See ARCHITECTURE #14.
     if Array.isArray mod.GATE_FIELDS
       anyDeclared = true

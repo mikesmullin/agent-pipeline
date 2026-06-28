@@ -118,26 +118,117 @@ _resolveSystems = ->
 # (`evictHydrated`) runs at every stage boundary so a stage's full bodies live
 # only for that stage. A throwing system is logged and skipped (one bad entity
 # never wedges the loop).
-_runActivityStages = (activity) ->
+#
+# ── WORKER-POOL MODEL (STAGE_CONCURRENCY_PLAN) ────────────────────────────────
+# Stages no longer run serially-to-completion within a tick (which let a slow
+# stage head-of-line-block the whole loop). Instead EVERY stage runs as its own
+# continuous worker, all concurrent: each worker polls its gate, claims up to
+# (width − inflight) eligible entities (excluding ones it's already processing),
+# runs each via `processOne` fire-and-forget, and refills a slot the instant an
+# entity finishes. `pipelineWidth` is the MAX concurrency PER STAGE. A slow stage
+# saturates only its own `width` slots; the others keep flowing.
+
+# Optional global in-flight semaphore (maxTotalInflight). Caps the SUM across all
+# stages when set; a no-op (always grants) when null.
+_GLOBAL_INFLIGHT = { n: 0 }
+_acquireGlobalSlot = ->
+  cap = _G.maxTotalInflight
+  return true unless cap?
+  return false if _GLOBAL_INFLIGHT.n >= cap
+  _GLOBAL_INFLIGHT.n += 1
+  true
+_releaseGlobalSlot = -> _GLOBAL_INFLIGHT.n -= 1 if _G.maxTotalInflight?
+
+# Update the live per-stage in-flight gauge the RunMeter renders.
+_stageInflight = (name, n) ->
+  return unless _G.runStats?
+  (_G.runStats.stageInflight ?= {})[name] = n
+  (_G.runStats.stageCounts   ?= {})[name] = n
+
+# Run ONE entity through a stage under an optional per-stage timeout. On timeout,
+# call the system's `onTimeout` hook (which marks the entity blocked so its gate
+# won't re-claim it) and resolve — freeing the slot so the stage keeps moving.
+_processWithTimeout = (activity, step, id) ->
+  timeoutMs = _G.stageTimeoutMs?[step.name]
+  run = step.processOne activity.id, id
+  return (await run) unless timeoutMs? and timeoutMs > 0
+  timer = null
+  timed = new Promise (res) ->
+    timer = setTimeout (-> res { __timeout: true }), timeoutMs
+    timer?.unref?()
+  outcome = await Promise.race [ run.then((v) -> { __value: v }), timed ]
+  clearTimeout timer if timer
+  if outcome?.__timeout
+    _G.log 'stage.timeout', { stage: step.name, id, ms: timeoutMs }
+    try await step.onTimeout?(activity.id, id)
+    catch err then _G.log 'stage.timeout_hook_error', { stage: step.name, id, error: err?.message ? String(err) }
+    # The abandoned `run` keeps executing until it finishes on its own; onTimeout
+    # has already marked the entity un-claimable, so it won't be double-processed.
+    return undefined
+  outcome.__value
+
+# One continuous worker for one stage. Resolves only when `_G.quit` AND its
+# in-flight set has fully drained (the graceful unbounded drain — second Ctrl-C
+# force-quits the process; see runPipeline's SIGINT handler).
+_runStageWorker = (activity, step) ->
+  inflight = new Set()
+  _stageInflight step.name, 0
+  hasWorker = (typeof step.selectEligible is 'function') and (typeof step.processOne is 'function')
+  loop
+    if _G.quit
+      break if inflight.size is 0
+      await _G.sleep 50
+      continue
+
+    unless hasWorker
+      # Legacy adapter: a system exporting only `fn` runs its own
+      # Entity.query+pMap batch. Loop it with idle backoff. It still runs
+      # CONCURRENTLY with the other stages' workers (the head-of-line fix) — it
+      # just lacks per-entity slot refill inside the stage.
+      try await step.fn()
+      catch err then _G.log 'stage.error', { stage: step.name, error: err?.message ? String(err) }
+      await _G.sleep _G.loopIntervalMs
+      continue
+
+    slots = _G.pipelineWidth - inflight.size
+    if slots <= 0
+      await _G.sleep _G.idlePollMs
+      continue
+    ids = []
+    try ids = (await step.selectEligible activity.id, { exclude: inflight, limit: slots, order: 'mtime' }) ? []
+    catch err then _G.log 'stage.select_error', { stage: step.name, error: err?.message ? String(err) }
+    if ids.length is 0
+      await _G.sleep _G.loopIntervalMs
+      continue
+    for id in ids
+      break unless _acquireGlobalSlot()
+      sid = String id
+      inflight.add sid
+      _stageInflight step.name, inflight.size
+      do (sid) ->
+        Promise.resolve()
+          .then -> _processWithTimeout activity, step, sid
+          .catch (err) -> _G.log 'stage.error', { stage: step.name, id: sid, error: err?.message ? String(err) }
+          .finally ->
+            inflight.delete sid
+            _releaseGlobalSlot()
+            _stageInflight step.name, inflight.size
+            try _G.Entity.evictHydratedOne? activity.id, sid
+  undefined
+
+# Run ALL of one activity's stages as concurrent workers. Resolves when every
+# worker has drained after `_G.quit`. Cleanup hooks (e.g. close a browser pool)
+# run once afterward.
+_runActivity = (activity) ->
   _G.withActivity activity.id, ->
     _G.log 'loop.start', { activity: activity.id }
     try
-      for step in activity.pipeline
-        break if _G.quit
-        _G.currentSystem = step.name
-        if _G.runStats?
-          _G.runStats.activity = activity.id
-          _G.runStats.stage = step.name
-          delete _G.runStats.stageCounts[step.name]   # reset this tick's count for the stage
-        stepStart = Date.now()
-        stop = Telemetry.startTimer "stage.#{step.name}"
-        await step.fn()
-        stop()
-        _G.runStats?.stageMs[step.name] = Date.now() - stepStart
-        _G.Entity.evictHydrated activity.id
+      await Promise.all(activity.pipeline.map (step) -> _runStageWorker activity, step)
     catch err
       _G.log 'loop.error', { activity: activity.id, error: err?.message ? String(err) }
-    _G.runStats?.stage = null
+    for step in activity.pipeline when typeof step.cleanup is 'function'
+      try await step.cleanup()
+      catch err then _G.log 'loop.cleanup_error', { activity: activity.id, stage: step.name, error: err?.message ? String(err) }
     _G.log 'loop.done', { activity: activity.id }
 
 # ── Multi-activity loop (activity-first / activities/*.yaml projects) ──────────
@@ -165,103 +256,85 @@ _runMultiLoop = (allActivities, argv) ->
 
   #{_DIM}activities#{_RST} #{activities.map((a) -> a.id).join ' · '}
   #{_DIM}model     #{_RST} #{_G.MODEL}
-  #{_DIM}mode      #{_RST} #{if _G.parallelActivities then 'parallel' else 'sequential'} #{_DIM}· field-index #{if _G.useFieldIndex then 'on' else 'off'}#{_RST}
+  #{_DIM}width     #{_RST} #{_G.pipelineWidth} #{_DIM}per stage · stages run concurrently as worker pools#{_RST}#{if _G.maxTotalInflight? then " #{_DIM}· global cap #{_G.maxTotalInflight}#{_RST}" else ''}
 
-  #{_DIM}Ctrl+C to stop gracefully.#{_RST}
+  #{_DIM}Ctrl+C to stop gracefully (drains in-flight); Ctrl+C again to force quit.#{_RST}
   """
 
-  # Live status line — spinner + tick + elapsed + activity›stage + queue depth +
-  # per-stage count·timing. Shared `_G.runStats` is mutated by the loop + _G.log.
+  # Live status line — spinner + elapsed + per-stage IN-FLIGHT histogram (each
+  # worker updates `stageInflight`). Shared `_G.runStats` is mutated by the
+  # workers + _G.log.
   stageNames = []
   for a in activities
     stageNames.push step.name for step in (a.pipeline ? []) when step.name not in stageNames
   _G.runStats =
     startedAt: Date.now()
     tick: 0
-    activity: null
+    activity: (if activities.length is 1 then activities[0].id else null)
     stage: null
     total: 0
     remaining: null
     stageCounts: {}
+    stageInflight: {}
     stageMs: {}
   meter = new RunMeter _G.runStats, stageNames
   _G._runMeter = meter
   meter.start()
 
-  while not _G.quit
-    try
-      _G.runStats.tick += 1
-      _G.runStats.total = (try (activities.reduce ((n, a) -> n + (_G.Entity.count?(a.id) ? 0)), 0) catch then _G.runStats.total)
-      if _G.parallelActivities
-        await Promise.all(activities.map (a) -> _runActivityStages a)
-      else
-        for activity in activities
-          break if _G.quit
-          await _runActivityStages activity
-      Telemetry.report()
-      Telemetry.reset()
-    catch err
-      meter.clear()
-      console.error "#{_RED}loop error:#{_RST}", err?.stack or err
-    break if _G.quit
-    await _G.sleep _G.loopIntervalMs
+  # Background heartbeat: refresh the on-disk total + spin the meter's tick. The
+  # actual work runs in the per-stage workers (no per-tick sweep anymore).
+  hb = setInterval (->
+    _G.runStats.tick += 1
+    _G.runStats.total = (try (activities.reduce ((n, a) -> n + (_G.Entity.count?(a.id) ? 0)), 0) catch then _G.runStats.total)
+  ), 1000
+  hb?.unref?()
+
+  # Launch every activity's worker pool concurrently and await graceful drain
+  # (each _runActivity resolves only once _G.quit AND its workers have drained).
+  try
+    await Promise.all(activities.map (a) -> _runActivity a)
+  catch err
+    meter.clear()
+    console.error "#{_RED}loop error:#{_RST}", err?.stack or err
+  finally
+    clearInterval hb
+    Telemetry.report()
 
   meter.stop()
   _G._runMeter = null
 
-# ── Single-activity loop (config.yaml `systems:` projects — the scaffold) ──────
-_runSingleLoop = (opts) ->
-  { cfg, systems } = await _resolveSystems()
-  _G.pipelineWidth = _G._widthOverride if _G._widthOverride?   # CLI --width wins over config
-  _watchCode systems unless opts.hotReload is false
-  await _G.Entity.init 'default'
-
-  console.log """
-
-  #{_BLD}#{_CYN}  🔁 #{cfg.name or basename _G.ROOT}#{_RST}#{_DIM}  agent pipeline#{_RST}
-
-  #{_DIM}db     #{_RST} #{_G.DB_DIR}
-  #{_DIM}model  #{_RST} #{_G.MODEL}
-  #{_DIM}systems#{_RST} #{systems.map((s) -> s.name).join ' → '}
-
-  #{_DIM}♻️  hot reload active — edits to systems/ and microagents/ apply without restart.#{_RST}
-  #{_DIM}Ctrl+C to stop gracefully.#{_RST}
-  """
-
-  while not _G.quit
-    try
-      timings = {}
-      for { name, fn } in systems
-        break if _G.quit
-        unless fn?
-          console.error "#{_RED}system '#{name}' has no exported fn — skipping#{_RST}"
-          continue
-        _G.currentSystem = name
-        t0 = Date.now()
-        await fn()
-        timings[name] = Date.now() - t0
-
-      all = _G.World.for('default').all()
-      byStage = {}
-      for e in all
-        st = e.workflow?._stage or 'uncaptured'
-        byStage[st] = (byStage[st] or 0) + 1
-      waiting = all.filter (e) -> e.workflow?._status is 'waiting_on_human'
-
-      active = Object.entries(timings).filter ([, ms]) -> ms > 5
-      timingStr = if active.length then '  ' + active.map(([n, ms]) -> "#{n}:#{ms}ms").join('  ') else ''
-      stageStr = Object.entries(byStage).filter(([, n]) -> n > 0).map(([s, n]) -> "#{s}:#{n}").join '  '
-
-      parts = ["#{_DIM}#{_ts()}#{_RST} 💤"]
-      parts.push if stageStr then stageStr else "#{_DIM}no entities. loop in #{_G.loopIntervalMs / 1000}s.#{_RST}"
-      parts.push "#{_DIM}(#{waiting.length} waiting)#{_RST}" if waiting.length
-      parts.push "#{_DIM}#{timingStr}#{_RST}" if timingStr
-      console.log parts.join ' '
-    catch err
-      console.error "#{_RED}loop error:#{_RST}", err?.stack or err
-
-    break if _G.quit
-    await _G.sleep _G.loopIntervalMs
+# ── Single-activity projects → synthesized as a ONE-activity set ──────────────
+# There is no separate single-activity loop anymore (STAGE_CONCURRENCY_PLAN §5.9:
+# multi-activity is the only execution model). A `config.yaml systems:` scaffold
+# is synthesized into one `'default'` activity whose `pipeline` is its systems
+# list (each captured with its worker-pool seams + GATE_FIELDS), then run through
+# the same `_runMultiLoop` worker supervisor. NOTE: hot-reload of systems is not
+# carried over to this synthesized path (it was a property of the deleted serial
+# loop); restart to apply edits.
+_synthesizeSingleActivity = ->
+  { systems } = await _resolveSystems()
+  indexFields = new Set()
+  anyIdx = false
+  pipeline = []
+  for s in systems
+    filePath = resolve _G.SYSTEMS_DIR, "#{s.name}.coffee"
+    mod = try (await import(filePath)) catch then {}
+    fn = mod.default ? mod["#{s.name}System"] ? mod[s.name] ? s.fn
+    pipeline.push {
+      name: "#{s.name}System"
+      fn
+      selectEligible: mod.selectEligible ? null
+      processOne:     mod.processOne ? null
+      onTimeout:      mod.onTimeout ? null
+      cleanup:        mod.cleanup ? null
+    }
+    if Array.isArray mod.GATE_FIELDS
+      anyIdx = true
+      indexFields.add f for f in mod.GATE_FIELDS
+  act = Activities.get 'default'
+  act.pipeline = pipeline
+  act._indexFields = (if anyIdx then indexFields else null)
+  [act]
 
 # The one entry point a project's agent.coffee calls. DUAL-MODE:
 #   • MULTI-ACTIVITY — the Activities registry has activities with a non-empty
@@ -279,10 +352,10 @@ export runPipeline = (opts = {}) ->
   isMulti = multiActivities.length > 0
 
   # Apply framework loop knobs from a root config.yaml if present (model /
-  # pipeline_width / loop_interval_ms / concurrency / retry / parallel_activities).
-  # Tolerant: multi-activity projects need no root config (defaults apply); the
-  # single-activity path re-reads it via loadConfig (which also loads `systems:`).
-  await loadConfigKnobs() if isMulti
+  # pipeline_width / loop_interval_ms / concurrency / retry / parallel_activities /
+  # max_total_inflight / stage_timeout_ms). Tolerant: defaults apply when absent.
+  # Loaded for BOTH modes (single-activity is synthesized into a one-activity set).
+  await loadConfigKnobs()
 
   # CLI override for pipeline width — `--width N` / `--pipeline-width N` wins over
   # config.yaml so you can fan out (e.g. ingest + process N new entities per tick)
@@ -318,7 +391,8 @@ export runPipeline = (opts = {}) ->
   pidFile = await _pidGuard()
   _removePid = -> unlink(pidFile).catch ->
 
-  # Graceful shutdown (both modes): first Ctrl+C finishes the tick, second forces.
+  # Graceful shutdown: first Ctrl+C stops claiming new entities and drains the
+  # in-flight ones to completion (unbounded); a second Ctrl+C force-quits.
   sigintCount = 0
   process.on 'SIGINT', ->
     sigintCount++
@@ -327,13 +401,11 @@ export runPipeline = (opts = {}) ->
       await _removePid()
       process.exit 1
     _G.quit = true
-    console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — finishing current iteration..."
+    console.log "\n#{_DIM}#{_ts()}#{_RST} Graceful shutdown — draining in-flight entities (Ctrl+C again to force)..."
   process.on 'SIGTERM', -> _G.quit = true
 
-  if isMulti
-    await _runMultiLoop multiActivities, argv
-  else
-    await _runSingleLoop opts
+  activities = if isMulti then multiActivities else (await _synthesizeSingleActivity())
+  await _runMultiLoop activities, argv
 
   await _removePid()
   await _G.Entity.stopWatching?()

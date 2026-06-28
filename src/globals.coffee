@@ -55,6 +55,23 @@ export _G =
     maxCount:  5
     backoffMs: 60_000
 
+  # ── Worker-pool knobs (STAGE_CONCURRENCY_PLAN) ──────────────────────────────
+  # Each stage runs as its own continuous worker, processing up to `pipelineWidth`
+  # entities concurrently and independently of the other stages (a slow stage no
+  # longer head-of-line-blocks the whole loop).
+  #
+  # maxTotalInflight: optional global cap on the SUM of in-flight entities across
+  #   all stages (null = OFF → pure per-stage; the worst case is width × stages).
+  maxTotalInflight: null
+  # stageTimeoutMs: per-stage hard timeout for ONE entity's processing, keyed by
+  #   the stage's system name (e.g. { verifySystem: 300000 }). When an entity
+  #   exceeds it, the worker aborts it, the system's onTimeout hook marks it
+  #   blocked, and the slot frees for the next entity. {} = no timeouts (stages
+  #   whose every op is fast — resolve/publish/report — need none).
+  stageTimeoutMs: {}
+  # idlePollMs: how often a fully-saturated worker re-checks for a freed slot.
+  idlePollMs: 25
+
   quit: false
   currentEntityId: null
   currentSystem: null
