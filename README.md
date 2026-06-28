@@ -1,4 +1,21 @@
-# 🔁 Agent Pipeline
+<!-- LOGO -->
+<h1>
+<p align="center">
+  <img src="docs/agent-pipeline-c.png" alt="Logo" />
+  <br/>Agent Pipeline
+</h1>
+  <p align="center">
+    <a href="#install">Install</a>
+    ·
+    <a href="#build-a-pipeline">Build a pipeline</a>
+    ·
+    <a href="#using-the-library">Using the library</a>
+    ·
+    <a href="https://mikesmullin.github.io/agent-pipeline/">📖 HTML Documentation 👈</a>
+    ·
+    <a href="#contributing">Contributing</a>
+  </p>
+</p>
 
 **A framework for building agents that run as a loop, not a script.** Most "AI
 agent" code is a one-shot prompt chain: it runs top to bottom, and when it
