@@ -146,11 +146,16 @@ _stageInflight = (name, n) ->
   (_G.runStats.stageCounts   ?= {})[name] = n
 
 # Run ONE entity through a stage under an optional per-stage timeout. On timeout,
-# call the system's `onTimeout` hook (which marks the entity blocked so its gate
-# won't re-claim it) and resolve — freeing the slot so the stage keeps moving.
+# we ABORT the in-flight work (so it actually releases its resources — e.g. a
+# wedged browser lease) via an AbortSignal handed to processOne, THEN call the
+# system's `onTimeout` hook, and resolve — freeing the slot so the stage keeps
+# moving. processOne receives { signal }; abort-aware stages must close their
+# resources when it fires. (A stage that ignores the signal keeps the old
+# behavior: the abandoned run finishes on its own.)
 _processWithTimeout = (activity, step, id) ->
   timeoutMs = _G.stageTimeoutMs?[step.name]
-  run = step.processOne activity.id, id
+  ac = new AbortController()
+  run = step.processOne activity.id, id, { signal: ac.signal }
   return (await run) unless timeoutMs? and timeoutMs > 0
   timer = null
   timed = new Promise (res) ->
@@ -160,10 +165,12 @@ _processWithTimeout = (activity, step, id) ->
   clearTimeout timer if timer
   if outcome?.__timeout
     _G.log 'stage.timeout', { stage: step.name, id, ms: timeoutMs }
+    try ac.abort()   # signal the abandoned run to release its resources (browser lease, etc.)
+    catch then undefined
     try await step.onTimeout?(activity.id, id)
     catch err then _G.log 'stage.timeout_hook_error', { stage: step.name, id, error: err?.message ? String(err) }
-    # The abandoned `run` keeps executing until it finishes on its own; onTimeout
-    # has already marked the entity un-claimable, so it won't be double-processed.
+    # onTimeout marked the entity un-claimable; the aborted run unwinds + frees
+    # its resources, so it won't be double-processed or leak its slot.
     return undefined
   outcome.__value
 

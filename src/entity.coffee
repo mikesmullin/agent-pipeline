@@ -29,7 +29,10 @@ import { pMap } from './pmap.coffee'
 # Resolve an activity's entity dir + a single entity's file path. Single-activity
 # projects use the synthesized 'default' activity (entityDir = _G.DB_DIR).
 _dirOf  = (activityId) -> Activities.entityDir activityId
-_fileOf = (activityId, id) -> resolve _dirOf(activityId), "#{id}.yaml"
+_fileOf = (activityId, id) ->
+  if typeof id is 'object' or "#{id}" is '[object Object]'
+    throw new Error "Entity id must be a scalar, got #{typeof id} for activity=#{activityId} (a system likely passed the entity object to transition/load instead of its id)"
+  resolve _dirOf(activityId), "#{id}.yaml"
 
 # ── Optimistic-concurrency (CAS) primitives ──────────────────────────────────
 # A cheap per-file fingerprint (mtimeMs + size) captured on every read and checked
